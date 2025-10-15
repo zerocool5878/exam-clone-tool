@@ -88,76 +88,130 @@ def detect_file_type(filepath):
 def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
     """
     Extract mapping for comp_test scenario
-    - comp_test_filepath: file like tart.html (contains the target IDs we want)
-    - exam_filepath: exam file (contains alternatives that include comp_test IDs)
+    - comp_test_filepath: target file (contains the correct answers)
+    - exam_filepath: exam file (current selections to compare against target)
     
-    Logic: For each exam question, if comp_test ID exists in that question's alternatives,
-           then map exam_main_id → comp_test_id
+    Correct Logic: For each exam question:
+    1. Check if exam main ID already exists as target main ID → no change needed
+    2. If not, get ALL alternatives from that exam question section
+    3. Search target to find which target main question contains any exam alternative
+    4. Suggest changing exam main ID to that target main ID
     """
     try:
-        # Read comp_test file (tart.html)
+        # Read target file 
         with open(comp_test_filepath, 'r', encoding='utf-8') as f:
-            comp_content = f.read()
+            target_content = f.read()
         
-        # Read exam file (exam2.html)  
+        # Read exam file  
         with open(exam_filepath, 'r', encoding='utf-8') as f:
             exam_content = f.read()
             
     except Exception as e:
         return None, f"Error reading files: {e}"
     
-    comp_decoded = html.unescape(comp_content)
+    target_decoded = html.unescape(target_content)
     exam_decoded = html.unescape(exam_content)
     
-    # Extract all comp_test IDs (these are our targets)
-    comp_id_pattern = re.compile(r'\(id:(\d+)\)')
-    comp_ids = comp_id_pattern.findall(comp_decoded)
-    comp_unique = list(dict.fromkeys(comp_ids))
-    comp_id_set = set(comp_unique)  # For fast lookup
+    # Extract target numbered questions (main questions in target)
+    target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
+    target_numbered = target_numbered_pattern.findall(target_decoded)
+    target_sorted = sorted(target_numbered, key=lambda x: int(x[0]))
     
-    print(f"DEBUG: Comp test has {len(comp_unique)} target IDs")
+    print(f"DEBUG: Target has {len(target_sorted)} main questions")
     
-    # Extract exam numbered questions 
-    exam_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    exam_numbered = exam_numbered_pattern.findall(exam_decoded)
-    exam_sorted = sorted(exam_numbered, key=lambda x: int(x[0]))
+    # Create set of target main IDs for quick lookup
+    target_main_ids = set(qid for _, qid in target_sorted)
     
-    print(f"DEBUG: Exam has {len(exam_sorted)} numbered questions")
+    # Build target question sections with all their alternatives
+    target_alternatives_map = {}  # alternative_id → main_id
     
-    # Build mapping: exam_main_id → comp_test_id
-    exam_main_to_comp = {}
-    
-    for i, (exam_q_num, exam_main_id) in enumerate(exam_sorted):
-        question_num = int(exam_q_num)
+    for i, (target_q_num, target_main_id) in enumerate(target_sorted):
+        question_num = int(target_q_num)
         
-        # Extract this exam question's section (including alternatives)
-        if i < len(exam_sorted) - 1:
-            next_q_num = int(exam_sorted[i+1][0])
+        # Extract this target question's section (including alternatives)
+        if i < len(target_sorted) - 1:
+            next_q_num = int(target_sorted[i+1][0])
             section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
         else:
             section_pattern = rf'{question_num}\.\s+.*'
         
-        section_match = re.search(section_pattern, exam_decoded, re.DOTALL)
+        section_match = re.search(section_pattern, target_decoded, re.DOTALL)
         
         if section_match:
             section_content = section_match.group(0)
             section_ids = re.findall(r'\(id:(\d+)\)', section_content)
             section_unique = list(dict.fromkeys(section_ids))
             
-            # Find which comp_test IDs are in this exam section
-            comp_ids_in_section = [cid for cid in section_unique if cid in comp_id_set]
+            # Map all IDs in this target section to the main ID
+            for alt_id in section_unique:
+                target_alternatives_map[alt_id] = target_main_id
             
-            if comp_ids_in_section:
-                comp_target_id = comp_ids_in_section[0]  # Use first match
-                
-                # Map the exam main ID to the comp_test ID
-                exam_main_to_comp[exam_main_id] = comp_target_id
-                
-                print(f"DEBUG: Q{question_num} main ID {exam_main_id} → comp_test ID {comp_target_id}")
+            print(f"DEBUG: Target Q{question_num} (main:{target_main_id}) has {len(section_unique)} IDs")
     
-    print(f"DEBUG: Total exam_main→comp_test mappings: {len(exam_main_to_comp)}")
+    # Extract exam numbered questions with their alternatives
+    exam_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
+    exam_numbered = exam_numbered_pattern.findall(exam_decoded)
+    exam_sorted = sorted(exam_numbered, key=lambda x: int(x[0]))
     
-    return exam_main_to_comp, None
+    print(f"DEBUG: Exam has {len(exam_sorted)} questions")
+    
+    # Build mapping: exam_main_id → target_main_id (what exam should change to)
+    exam_to_target_mapping = {}
+    # Collect all exam main IDs for exclusion
+    all_exam_main_ids = set(main_id for _, main_id in exam_sorted)
+    # Track which target main IDs have already been assigned to prevent duplicates
+    assigned_target_main_ids = set()
+
+    for i, (exam_q_num, exam_main_id) in enumerate(exam_sorted):
+        question_num = int(exam_q_num)
+
+        # STEP 1: Check if exam main ID is already a target main ID
+        if exam_main_id in target_main_ids:
+            exam_to_target_mapping[exam_main_id] = exam_main_id
+            assigned_target_main_ids.add(exam_main_id)  # Track this assignment
+            print(f"DEBUG: Q{question_num} exam main ID {exam_main_id} is already target main - no change")
+            continue
+
+        # STEP 2: Get all alternatives from this exam question section
+        if i < len(exam_sorted) - 1:
+            next_q_num = int(exam_sorted[i+1][0])
+            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
+        else:
+            section_pattern = rf'{question_num}\.\s+.*'
+
+        section_match = re.search(section_pattern, exam_decoded, re.DOTALL)
+
+        if section_match:
+            section_content = section_match.group(0)
+            exam_section_ids = re.findall(r'\(id:(\d+)\)', section_content)
+            exam_unique_ids = list(dict.fromkeys(exam_section_ids))
+
+            print(f"DEBUG: Exam Q{question_num} has {len(exam_unique_ids)} alternatives: {exam_unique_ids[:5]}...")
+
+            # STEP 3: Find all possible target main matches for exam alternatives
+            possible_target_main_ids = []
+            for exam_alt_id in exam_unique_ids:
+                if exam_alt_id in target_alternatives_map:
+                    target_main_id = target_alternatives_map[exam_alt_id]
+                    # Only consider if:
+                    # 1. Not already a main question in exam
+                    # 2. Not already assigned to another exam question
+                    if (target_main_id not in all_exam_main_ids and 
+                        target_main_id not in assigned_target_main_ids):
+                        possible_target_main_ids.append(target_main_id)
+
+            if possible_target_main_ids:
+                # Use the first valid target main ID
+                chosen_target_main = possible_target_main_ids[0]
+                exam_to_target_mapping[exam_main_id] = chosen_target_main
+                assigned_target_main_ids.add(chosen_target_main)  # Track this assignment
+                print(f"DEBUG: Q{question_num} exam main {exam_main_id} → target main {chosen_target_main} (filtered, via alternatives)")
+            else:
+                print(f"DEBUG: Q{question_num} exam main {exam_main_id} - NO MATCH in target (after filtering)")
+
+    print(f"DEBUG: Total exam→target mappings: {len(exam_to_target_mapping)}")
+
+    return exam_to_target_mapping, None
 
 def extract_target_mapping_fixed(filepath):
     """Extract alternative-to-main mapping using proper question boundary detection"""
