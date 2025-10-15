@@ -18,6 +18,10 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
+
+# PyInstaller
+*.spec
+temp_build/
 *.egg
 MANIFEST
 
