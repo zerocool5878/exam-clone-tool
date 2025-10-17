@@ -30,14 +30,20 @@ def build_executable():
         '--onefile',                    # Single file
         '--windowed',                   # No console window
         '--name', exe_name,             # Executable name
-        '--icon=icon.ico',              # Icon (if exists)
         '--add-data', 'auto_updater.py;.',  # Include auto_updater
         'exam_clone_tool_v2.py'         # Main script
     ]
     
     # Add icon if it exists
-    if not os.path.exists('icon.ico'):
-        cmd.remove('--icon=icon.ico')
+    if os.path.exists('test_icon.ico'):
+        cmd.insert(-1, '--icon=test_icon.ico')  # Insert before the main script
+        print(f"🎨 Using custom icon: test_icon.ico")
+        print(f"🔍 Icon file size: {os.path.getsize('test_icon.ico')} bytes")
+    elif os.path.exists('icon.ico'):
+        cmd.insert(-1, '--icon=icon.ico')
+        print(f"🎨 Using icon: icon.ico")
+    else:
+        print("📋 No icon file found, using default")
     
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)

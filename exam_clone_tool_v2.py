@@ -1,5 +1,7 @@
 import re
 import html
+import logging
+logging.basicConfig(filename='debug_log.txt', level=logging.DEBUG, format='%(asctime)s %(message)s')
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -18,7 +20,7 @@ except ImportError:
     CAPTURE_AVAILABLE = False
 
 # Application version and update configuration
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 GITHUB_REPO = "zerocool5878/exam-clone-tool"
 
 # Import auto-updater
@@ -37,11 +39,11 @@ def resolve_conflicts(mapping_dict, target_content, exam_content):
     try:
         target_decoded = html.unescape(target_content)
         exam_decoded = html.unescape(exam_content)
-        
+
         # Find target main IDs with duplicate detection
         target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
         target_numbered = target_numbered_pattern.findall(target_decoded)
-        
+
         # Check for duplicate target main IDs
         target_id_counts = {}
         for q_num, main_id in target_numbered:
@@ -49,18 +51,18 @@ def resolve_conflicts(mapping_dict, target_content, exam_content):
                 target_id_counts[main_id].append(f"Q{q_num}")
             else:
                 target_id_counts[main_id] = [f"Q{q_num}"]
-        
+
         duplicate_target_ids = {id: questions for id, questions in target_id_counts.items() if len(questions) > 1}
         if duplicate_target_ids:
-            print("WARNING: Duplicate target main IDs detected!")
+            logging.debug("WARNING: Duplicate target main IDs detected!")
             for main_id, questions in duplicate_target_ids.items():
-                print(f"  Target ID {main_id} appears in: {', '.join(questions)}")
-        
+                logging.debug(f"  Target ID {main_id} appears in: {', '.join(questions)}")
+
         target_main_ids = set(main_id for _, main_id in target_numbered)
-        
+
         # Find exam main IDs with duplicate detection
         exam_numbered = target_numbered_pattern.findall(exam_decoded)
-        
+
         # Check for duplicate exam main IDs
         exam_id_counts = {}
         for q_num, main_id in exam_numbered:
@@ -68,19 +70,19 @@ def resolve_conflicts(mapping_dict, target_content, exam_content):
                 exam_id_counts[main_id].append(f"Q{q_num}")
             else:
                 exam_id_counts[main_id] = [f"Q{q_num}"]
-        
+
         duplicate_exam_ids = {id: questions for id, questions in exam_id_counts.items() if len(questions) > 1}
         if duplicate_exam_ids:
-            print("WARNING: Duplicate exam main IDs detected!")
+            logging.debug("WARNING: Duplicate exam main IDs detected!")
             for main_id, questions in duplicate_exam_ids.items():
-                print(f"  Exam ID {main_id} appears in: {', '.join(questions)}")
-        
+                logging.debug(f"  Exam ID {main_id} appears in: {', '.join(questions)}")
+
         exam_main_ids = set(main_id for _, main_id in exam_numbered)
-        
+
         # Identify conflicts
         target_usage = {}
         conflicts = {}
-        
+
         for exam_id, target_id in mapping_dict.items():
             if target_id in target_usage:
                 # Conflict found
@@ -90,81 +92,82 @@ def resolve_conflicts(mapping_dict, target_content, exam_content):
                 conflicts[target_id].append(target_usage[target_id])
             else:
                 target_usage[target_id] = exam_id
-        
-        print(f"DEBUG: Found {len(conflicts)} conflicted target IDs")
-        
+
+        logging.debug(f"Found {len(conflicts)} conflicted target IDs")
+
         # If there are duplicate main IDs, add extra validation
         if duplicate_target_ids or duplicate_exam_ids:
-            print("DEBUG: Using enhanced validation due to duplicate main IDs")
-        
+            logging.debug("Using enhanced validation due to duplicate main IDs")
+
         # Resolve conflicts by finding alternative mappings
         resolved_mapping = mapping_dict.copy()
-        
+
         for target_id, conflicted_exam_ids in conflicts.items():
-            print(f"DEBUG: Resolving conflict for target ID {target_id} with exam IDs {conflicted_exam_ids}")
-            
+            logging.debug(f"Resolving conflict for target ID {target_id} with exam IDs {conflicted_exam_ids}")
+
             # Keep first exam ID, reassign others
             for i, exam_id in enumerate(conflicted_exam_ids[1:], 1):
-                print(f"DEBUG: Finding alternative for exam ID {exam_id}")
-                
+                logging.debug(f"Finding alternative for exam ID {exam_id}")
+
                 # Find exam question section to get alternatives
                 exam_sections = extract_exam_sections(exam_decoded)
                 alternatives = get_alternatives_for_exam_id(exam_id, exam_sections)
-                
+
                 # Find alternative that doesn't conflict
                 new_target = None
                 forbidden_targets = set(resolved_mapping.values())
-                
+
                 for alt_id in alternatives:
                     # Enhanced validation for duplicate main IDs
                     is_valid_target = alt_id in target_main_ids
                     is_not_exam_main = alt_id not in exam_main_ids
                     is_not_forbidden = alt_id not in forbidden_targets
-                    
+
                     # Additional check: if target has duplicates, warn but allow
                     if alt_id in duplicate_target_ids:
-                        print(f"DEBUG: Warning - alternative {alt_id} is a duplicate target ID")
-                    
+                        logging.debug(f"Warning - alternative {alt_id} is a duplicate target ID")
+
                     # Additional check: if alternative is duplicate exam main, reject
                     if alt_id in duplicate_exam_ids:
-                        print(f"DEBUG: Rejecting alternative {alt_id} - is duplicate exam main ID")
+                        logging.debug(f"Rejecting alternative {alt_id} - is duplicate exam main ID")
                         is_not_exam_main = False
-                    
+
                     if is_valid_target and is_not_exam_main and is_not_forbidden:
                         new_target = alt_id
                         break
-                
+
                 if new_target:
                     resolved_mapping[exam_id] = new_target
-                    print(f"DEBUG: Reassigned exam ID {exam_id} from {target_id} to {new_target}")
+                    logging.debug(f"Reassigned exam ID {exam_id} from {target_id} to {new_target}")
                 else:
-                    print(f"DEBUG: Could not find alternative for exam ID {exam_id}")
-        
-        return resolved_mapping
-        
-    except Exception as e:
-        print(f"DEBUG: Error in conflict resolution: {e}")
-        return None
+                    logging.debug(f"Could not find alternative for exam ID {exam_id}")
 
+        return resolved_mapping
+
+    except Exception as e:
+        logging.debug(f"Error in conflict resolution: {e}")
+        return None
+    
 def extract_exam_sections(exam_content):
     """Extract question sections from exam content"""
     sections = {}
     numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
     matches = numbered_pattern.findall(exam_content)
-    
+    logging.debug(f"Found {len(matches)} numbered questions in exam content.")
     for i, (q_num, main_id) in enumerate(matches):
         question_num = int(q_num)
-        
         if i < len(matches) - 1:
             next_q_num = int(matches[i+1][0])
             section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
         else:
             section_pattern = rf'{question_num}\.\s+.*'
-        
         section_match = re.search(section_pattern, exam_content, re.DOTALL)
         if section_match:
             sections[main_id] = section_match.group(0)
-    
+            logging.debug(f"Section for main_id {main_id} (Q{question_num}) length: {len(section_match.group(0))}")
+        else:
+            logging.debug(f"No section found for main_id {main_id} (Q{question_num})")
+    logging.debug(f"Extracted {len(sections)} sections from exam content.")
     return sections
 
 def get_alternatives_for_exam_id(exam_id, exam_sections):
@@ -172,7 +175,10 @@ def get_alternatives_for_exam_id(exam_id, exam_sections):
     if exam_id in exam_sections:
         section_content = exam_sections[exam_id]
         all_ids = re.findall(r'\(id:(\d+)\)', section_content)
-        return [alt_id for alt_id in all_ids if alt_id != exam_id]
+        alternatives = [alt_id for alt_id in all_ids if alt_id != exam_id]
+        logging.debug(f"Alternatives for exam_id {exam_id}: {alternatives}")
+        return alternatives
+    logging.debug(f"No section found for exam_id {exam_id} in exam_sections.")
     return []
 
 def get_browser_windows():
@@ -406,183 +412,171 @@ def detect_file_type(filepath):
 def extract_comp_test_mapping_from_content(target_content, exam_content):
     """
     Content-based version of comp test mapping for browser capture
-    Uses improved conflict-avoiding alternative matching algorithm
+    Goal: Make exam's main IDs exactly match target's main IDs by selecting correct alternatives
     """
     try:
         target_decoded = html.unescape(target_content)
         exam_decoded = html.unescape(exam_content)
-        
+
         # Extract target numbered questions (main questions in target)
         target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
         target_numbered = target_numbered_pattern.findall(target_decoded)
         target_sorted = sorted(target_numbered, key=lambda x: int(x[0]))
-        
-        print(f"DEBUG: Target has {len(target_sorted)} main questions")
-        
-        # Create set of all target main IDs for quick lookup
+
+        logging.debug(f"Target has {len(target_sorted)} main questions")
+
+        # ONLY target main IDs matter - these are what exam must match
         target_main_ids = set(main_id for _, main_id in target_sorted)
-        
+        logging.debug(f"Target main IDs (must match these): {sorted(target_main_ids)}")
+
         # Extract exam numbered questions
         exam_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
         exam_numbered = exam_numbered_pattern.findall(exam_decoded)
         exam_sorted = sorted(exam_numbered, key=lambda x: int(x[0]))
+
+        logging.debug(f"Exam has {len(exam_sorted)} questions")
         
-        print(f"DEBUG: Exam has {len(exam_sorted)} questions")
-        
-        # Create set of all exam main IDs to avoid conflicts
+        # Track which exam questions already have correct IDs
         exam_main_ids = set(main_id for _, main_id in exam_sorted)
-        print(f"DEBUG: Exam main IDs: {sorted(exam_main_ids)}")
-        print(f"DEBUG: Target main IDs: {sorted(target_main_ids)}")
-        
-        # PHASE 1: Build all possible matches for each question
-        question_matches = {}  # question_num -> list of possible target IDs
-        
+        logging.debug(f"Exam current main IDs: {sorted(exam_main_ids)}")
+
+        # STEP 1: Build all possible alternatives for each exam question
+        question_alternatives = {}  # question_num -> {'current_id': X, 'alternatives': [list of ALL IDs]}
+
         for i, (exam_q_num, exam_main_id) in enumerate(exam_sorted):
             question_num = int(exam_q_num)
-            
-            print(f"DEBUG: Analyzing Q{question_num} (current ID: {exam_main_id})")
-            
-            # Check if current exam ID is already a target main ID
-            if exam_main_id in target_main_ids:
-                print(f"DEBUG: Q{question_num} current ID {exam_main_id} is already correct")
-                continue  # No change needed
-                
-            # Extract exam question section to find all its alternatives
+
+            # Extract this question's section to get all alternatives
             if i < len(exam_sorted) - 1:
                 next_exam_q_num = int(exam_sorted[i+1][0])
                 section_pattern = rf'{question_num}\.\s+.*?(?={next_exam_q_num}\.\s+)'
             else:
                 section_pattern = rf'{question_num}\.\s+.*'
-            
+
             exam_section_match = re.search(section_pattern, exam_decoded, re.DOTALL)
-            
+
             if exam_section_match:
                 exam_section_content = exam_section_match.group(0)
                 exam_section_ids = re.findall(r'\(id:(\d+)\)', exam_section_content)
                 exam_unique_ids = list(dict.fromkeys(exam_section_ids))
-                
-                # Get alternatives (excluding current main ID)
-                exam_alternatives = [alt_id for alt_id in exam_unique_ids if alt_id != exam_main_id]
-                
-                # Find all possible target matches for this question
-                possible_matches = []
-                for alt_id in exam_alternatives:
-                    if alt_id in target_main_ids and alt_id not in exam_main_ids:
-                        possible_matches.append(alt_id)
-                
-                if possible_matches:
-                    question_matches[question_num] = {
-                        'exam_main_id': exam_main_id,
-                        'possible_targets': possible_matches
-                    }
-                    print(f"DEBUG: Q{question_num} has {len(possible_matches)} possible target matches: {possible_matches}")
-                else:
-                    print(f"DEBUG: Q{question_num} - no valid target matches found")
+
+                question_alternatives[question_num] = {
+                    'current_id': exam_main_id,
+                    'all_ids': exam_unique_ids  # Including current main ID
+                }
+                logging.debug(f"Q{question_num} current={exam_main_id}, all_ids={exam_unique_ids}")
+
+        # STEP 2: Identify which questions need changes and what their options are
+        questions_needing_change = {}  # question_num -> list of valid target IDs it can switch to
+
+        for question_num, info in question_alternatives.items():
+            current_id = info['current_id']
+            
+            # If current ID is already in target, no change needed
+            if current_id in target_main_ids:
+                logging.debug(f"Q{question_num}: ID {current_id} already matches target - no change needed")
+                continue
+            
+            # Find which alternatives are valid target main IDs
+            valid_alternatives = [alt_id for alt_id in info['all_ids'] 
+                                 if alt_id != current_id and alt_id in target_main_ids]
+            
+            if valid_alternatives:
+                questions_needing_change[question_num] = {
+                    'current_id': current_id,
+                    'options': valid_alternatives
+                }
+                logging.debug(f"Q{question_num}: needs change, options={valid_alternatives}")
             else:
-                print(f"DEBUG: Q{question_num} - could not extract section")
-        
-        # MULTI-PHASE: Iterative conflict resolution
+                logging.debug(f"Q{question_num}: needs change but has NO valid alternatives!")
+
+        # STEP 3: Perfect matching - assign alternatives to ensure all target IDs are covered
         exam_to_target_mapping = {}
+        used_target_ids = set()
         
-        print(f"DEBUG: Starting multi-phase conflict resolution for {len(question_matches)} questions")
-        
-        # Keep track of all constraints
-        forbidden_target_ids = set()
-        forbidden_target_ids.update(exam_main_ids)  # Can't suggest existing exam main IDs
-        
-        max_iterations = 10
+        # Add IDs that are already correct (no change needed)
+        for question_num, info in question_alternatives.items():
+            if question_num not in questions_needing_change:
+                current_id = info['current_id']
+                if current_id in target_main_ids:
+                    used_target_ids.add(current_id)
+                    logging.debug(f"Q{question_num}: keeping {current_id} (already correct)")
+
+        logging.debug(f"Starting conflict resolution. {len(questions_needing_change)} questions need changes")
+        logging.debug(f"Already matched target IDs: {sorted(used_target_ids)}")
+
+        # Iterative greedy assignment with constraint propagation
+        max_iterations = 20
         iteration = 0
         
-        while question_matches and iteration < max_iterations:
+        while questions_needing_change and iteration < max_iterations:
             iteration += 1
-            print(f"DEBUG: === PHASE {iteration} ===")
-            print(f"DEBUG: Forbidden targets: {sorted(forbidden_target_ids)}")
+            logging.debug(f"=== ITERATION {iteration} ===")
             
-            # Update available options for each remaining question
-            for q_num in list(question_matches.keys()):
-                original_targets = question_matches[q_num]['possible_targets']
-                available_targets = [t for t in original_targets 
-                                   if t not in forbidden_target_ids]
-                question_matches[q_num]['available_targets'] = available_targets
+            # Filter out already-used target IDs from each question's options
+            for q_num in list(questions_needing_change.keys()):
+                original_options = questions_needing_change[q_num]['options']
+                available_options = [opt for opt in original_options if opt not in used_target_ids]
                 
-                if not available_targets:
-                    print(f"DEBUG: Q{q_num} has no more available targets - removing")
-                    del question_matches[q_num]
+                if not available_options:
+                    logging.debug(f"Q{q_num}: ran out of options - cannot resolve!")
+                    del questions_needing_change[q_num]
+                else:
+                    questions_needing_change[q_num]['available_options'] = available_options
             
-            if not question_matches:
+            if not questions_needing_change:
                 break
-                
-            # Sort by flexibility (least options first) 
-            sorted_questions = sorted(question_matches.items(), 
-                                    key=lambda x: len(x[1]['available_targets']))
             
-            # Process most constrained question
-            q_num, match_info = sorted_questions[0]
-            available = match_info['available_targets']
+            # Sort by flexibility: questions with fewer options go first
+            sorted_questions = sorted(questions_needing_change.items(),
+                                     key=lambda x: len(x[1]['available_options']))
+            
+            # Assign the most constrained question
+            q_num, info = sorted_questions[0]
+            available = info['available_options']
             
             if available:
-                chosen_target = available[0]
-                exam_main_id = match_info['exam_main_id']
+                chosen_target = available[0]  # Pick first available
+                current_id = info['current_id']
                 
-                # TRIPLE CHECK before assignment
-                if chosen_target in forbidden_target_ids:
-                    print(f"ERROR: Target {chosen_target} is already forbidden - algorithm error!")
-                    del question_matches[q_num]
-                    continue
-                    
-                if chosen_target in exam_to_target_mapping.values():
-                    print(f"ERROR: Target {chosen_target} already assigned - algorithm error!")
-                    del question_matches[q_num]
-                    continue
+                # Make assignment
+                exam_to_target_mapping[current_id] = chosen_target
+                used_target_ids.add(chosen_target)
                 
-                # Make the assignment
-                exam_to_target_mapping[exam_main_id] = chosen_target
-                forbidden_target_ids.add(chosen_target)
+                logging.debug(f"Q{q_num}: {current_id} -> {chosen_target} (had {len(available)} options)")
                 
-                print(f"DEBUG: Q{q_num} assigned {exam_main_id} -> {chosen_target}")
-                print(f"DEBUG: Added {chosen_target} to forbidden list")
-                print(f"DEBUG: Current assignments: {exam_to_target_mapping}")
-                
-                # Remove this question from consideration
-                del question_matches[q_num]
-            else:
-                print(f"DEBUG: Q{q_num} has no available targets - removing")
-                del question_matches[q_num]
+                # Remove this question
+                del questions_needing_change[q_num]
         
-        if question_matches:
-            remaining_qs = list(question_matches.keys())
-            print(f"DEBUG: WARNING: Could not resolve all conflicts. Remaining questions: {remaining_qs}")
+        if questions_needing_change:
+            remaining = list(questions_needing_change.keys())
+            logging.debug(f"ERROR: Could not resolve {len(remaining)} questions: {remaining}")
+            return None, f"Could not find valid alternatives for questions: {remaining}"
+
+        # STEP 4: Validate the solution
+        logging.debug(f"=== VALIDATION ===")
+        logging.debug(f"Mappings to apply: {len(exam_to_target_mapping)}")
         
-        # CRITICAL: Validate no duplicate assignments
-        suggested_targets = list(exam_to_target_mapping.values())
-        duplicate_targets = []
-        for target in set(suggested_targets):
-            if suggested_targets.count(target) > 1:
-                duplicate_targets.append(target)
+        # Check for duplicates
+        assigned_targets = list(exam_to_target_mapping.values())
+        if len(assigned_targets) != len(set(assigned_targets)):
+            logging.debug("ERROR: Duplicate target assignments detected!")
+            return None, "Duplicate assignments - algorithm error"
         
-        if duplicate_targets:
-            print(f"ERROR: DUPLICATE TARGET ASSIGNMENTS DETECTED: {duplicate_targets}")
-            # Find which questions have duplicates
-            for dup_target in duplicate_targets:
-                conflicting_questions = []
-                for exam_id, target_id in exam_to_target_mapping.items():
-                    if target_id == dup_target:
-                        # Find question number for this exam_id
-                        for q_num, q_id in exam_sorted:
-                            if q_id == exam_id:
-                                conflicting_questions.append(q_num)
-                print(f"ERROR: Target {dup_target} assigned to multiple questions: {conflicting_questions}")
-            
-            # Return error instead of bad mappings
-            return None, f"Conflict resolution failed: duplicate assignments to targets {duplicate_targets}"
+        # Calculate final coverage
+        final_matched_ids = used_target_ids.copy()
+        logging.debug(f"Final matched target IDs: {len(final_matched_ids)}/{len(target_main_ids)}")
+        logging.debug(f"Matched: {sorted(final_matched_ids)}")
         
-        print(f"DEBUG: Final mappings after {iteration} phases: {len(exam_to_target_mapping)}")
-        print(f"DEBUG: Validation passed - no duplicate assignments")
+        missing = target_main_ids - final_matched_ids
+        if missing:
+            logging.debug(f"WARNING: {len(missing)} target IDs not matched: {sorted(missing)}")
+        
         return exam_to_target_mapping, None
-        
+
     except Exception as e:
         return None, f"Error in comp test mapping: {e}"
-
+    
 def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
     """
     Extract mapping for comp_test scenario using POSITIONAL matching
@@ -593,6 +587,8 @@ def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
     - Exam Q8 should get alternatives from Target Q8 (same position)
     - NOT based on ID matching across different question numbers
     """
+    import logging
+    logging.basicConfig(filename='debug_log.txt', level=logging.DEBUG, format='%(asctime)s %(message)s')
     try:
         # Read target file 
         with open(comp_test_filepath, 'r', encoding='utf-8') as f:
