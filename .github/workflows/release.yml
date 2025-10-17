@@ -63,24 +63,14 @@ jobs:
         
         $releaseNotes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding UTF8
     
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create Release and Upload Asset
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: v${{ steps.version.outputs.VERSION }}
-        release_name: Exam Clone Tool v${{ steps.version.outputs.VERSION }}
+        name: Exam Clone Tool v${{ steps.version.outputs.VERSION }}
         body_path: RELEASE_NOTES.md
         draft: false
         prerelease: false
-    
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+        files: ./dist/${{ steps.version.outputs.EXE_NAME }}.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/${{ steps.version.outputs.EXE_NAME }}.exe
-        asset_name: ${{ steps.version.outputs.EXE_NAME }}.exe
-        asset_content_type: application/octet-stream
