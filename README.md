@@ -1,72 +1,150 @@
-# 📄 Exam Clone Tool
+# Exam Clone Tool 🎯
 
-A Windows desktop application for comparing exam HTML files and generating mapping reports to clone exam questions with correct answers.
+An intelligent tool for comparing exam files and generating question ID mapping reports with automatic conflict resolution.
 
-## 🚀 Features
+## ✨ Features
 
-- **Smart Mapping**: Automatically maps exam alternative answers to target main question IDs
-- **HTML Processing**: Handles minified HTML exam files with proper question boundary detection
-- **Clean Interface**: User-friendly GUI with step-by-step file selection
-- **Detailed Reports**: Generates comprehensive mapping reports showing required changes
-- **Standalone Executable**: No Python installation required - just run the .exe
+- 🔍 **Smart File Comparison**: Compare target exams with test exams to identify question mappings
+- 🔄 **Conflict Resolution**: Automatically resolves duplicate ID assignments with intelligent alternatives
+- 📊 **Detailed Reports**: Comprehensive mapping analysis with success statistics
+- ⚡ **Auto-Updates**: Automatically checks for and installs updates from GitHub
+- 🎯 **Multi-Format Support**: Works with normal target files and comprehensive test files
+- 📈 **Progress Tracking**: Real-time analysis progress with detailed status updates
 
-## 📋 How to Use
+## 🚀 Quick Start
 
-1. **Select Target File**: Choose the file containing correct answers (answer key)
-2. **Select Test File**: Choose the exam file you want to compare against the target
-3. **Generate Report**: Click "Generate Clone Report" to see the mapping results
+### Download & Install
+1. Go to [Releases](https://github.com/zerocool5878/exam-clone-tool/releases)
+2. Download the latest `.exe` file
+3. Run directly - no installation required!
 
-## 🔧 Algorithm
+### Usage
+1. **Launch**: Double-click the `.exe` file
+2. **Auto-Update**: The tool checks for updates on startup
+3. **Select Files**:
+   - Click "📁 Select TARGET file" (your reference exam)
+   - Click "📁 Select TEST file" (exam to compare)
+4. **Generate Report**: Click "🔄 Generate Clone Report"
+5. **Review Results**: Check mapping suggestions and statistics
 
-The tool uses advanced regex pattern matching to:
-- Extract numbered questions from both files
-- Identify main question IDs vs alternative answer IDs
-- Map each exam alternative to its corresponding target main question
-- Generate change instructions in format: `Question #X: Change (ID:current) → (ID:target)`
+## 🔧 Auto-Update System
 
-## 📊 Example Output
+The tool includes a built-in auto-update system:
 
-```
-Question #1: ✅ Already correct (ID:107696)
-Question #2: Change (ID:107647) → (ID:107649)
-Question #3: Change (ID:107693) → (ID:107696)
-```
+- ✅ **Automatic Checking**: Checks GitHub releases on startup
+- 📥 **One-Click Updates**: Download and install updates with progress tracking
+- 🔄 **Seamless Restart**: Automatically restarts after successful update
+- 🛡️ **Backup & Recovery**: Creates backups and handles rollback if needed
 
-## 💾 Files Included
+### Update Process
+1. Tool starts → Checks GitHub for latest release
+2. If update available → Shows update dialog
+3. User clicks "Install Update" → Downloads new version
+4. Replaces current exe → Restarts automatically
 
-- `fixed_mapping_tool.py` - Main Python source code
-- `test_icon.ico` - Custom test sheet icon
-- `ExamCloneTool.exe` - Standalone Windows executable
-- `create_icon.py` - Icon generation script
+## 🏗️ Development
 
-## ⚙️ Technical Details
+### Building from Source
 
-- **Language**: Python 3.13+ with tkinter GUI
-- **Dependencies**: Built-in modules only (re, html, os, tkinter)
-- **Platform**: Windows 10/11
-- **Architecture**: 64-bit
-- **Size**: ~10MB executable
-
-## 🔨 Building from Source
-
-To rebuild the executable:
-
+#### Prerequisites
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "ExamCloneTool" --icon="test_icon.ico" fixed_mapping_tool.py
+pip install pyinstaller requests
 ```
 
-## 📝 License
+#### Build Executable
+```bash
+python build_release.py
+```
 
-This project is open source. Feel free to use, modify, and distribute.
+#### Manual Build
+```bash
+pyinstaller --onefile --windowed --name "Exam_Clone_Tool_v1.0.0" --add-data "auto_updater.py;." exam_clone_tool_v2.py
+```
 
-## 🎯 Use Cases
+### Creating Releases
 
-- Educational institutions managing exam variations
-- Test preparation companies creating practice exams  
-- Quality assurance for exam content management
-- Automated exam cloning and answer key verification
+#### Automated (GitHub Actions)
+1. Update version in `exam_clone_tool_v2.py`:
+   ```python
+   VERSION = "1.1.0"  # Update this
+   ```
+2. Commit and push changes
+3. Create and push a version tag:
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+4. GitHub Actions automatically builds and creates the release
+
+#### Manual Release
+1. Run build script: `python build_release.py`
+2. Go to GitHub → Releases → Create new release
+3. Upload the `.exe` file from `releases/` folder
+4. Publish release
+
+## 📁 Project Structure
+
+```
+exam-clone-tool/
+├── exam_clone_tool_v2.py      # Main application
+├── auto_updater.py            # Auto-update system
+├── build_release.py           # Build script
+├── requirements.txt           # Dependencies
+├── .github/workflows/         # GitHub Actions
+│   └── release.yml           # Automated release workflow
+└── releases/                 # Built executables (local)
+```
+
+## 🔄 Conflict Resolution Algorithm
+
+The tool uses a sophisticated multi-phase conflict resolution system:
+
+1. **Detection**: Identifies when multiple questions map to the same target ID
+2. **Alternative Search**: Finds valid alternatives for conflicting mappings
+3. **Validation**: Ensures alternatives meet all constraints:
+   - Must be a main question (not sub-question)
+   - Cannot already be assigned in the exam
+   - Cannot be a previously suggested replacement
+4. **Iterative Resolution**: Continues until all conflicts are resolved
+
+## 📊 Report Features
+
+- **Success Rate**: Percentage of successfully mapped questions
+- **Change Tracking**: Questions needing ID updates
+- **Conflict Detection**: Duplicate assignments with resolutions
+- **Unknown IDs**: Questions not found in target file
+- **Summary Statistics**: Complete mapping overview
+
+## �️ System Requirements
+
+- **OS**: Windows 10 or later
+- **Internet**: Required for auto-updates
+- **Memory**: Minimal (typically < 50MB)
+- **Storage**: < 10MB for executable
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## 📝 Version History
+
+- **v1.0.0**: Initial release with auto-update system
+- **v0.9.x**: Conflict resolution implementation
+- **v0.8.x**: Core mapping algorithm
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/zerocool5878/exam-clone-tool/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/zerocool5878/exam-clone-tool/discussions)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
-**Created with ❤️ for efficient exam management**
+Built with ❤️ using Python | Auto-updates powered by GitHub 🚀

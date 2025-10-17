@@ -1,0 +1,86 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller requests
+        if (Test-Path requirements.txt) { pip install -r requirements.txt }
+    
+    - name: Extract version
+      id: version
+      run: |
+        $content = Get-Content exam_clone_tool_v2.py -Raw
+        $version = ($content | Select-String 'VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "EXE_NAME=Exam_Clone_Tool_v$version" >> $env:GITHUB_OUTPUT
+    
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name "${{ steps.version.outputs.EXE_NAME }}" --add-data "auto_updater.py;." exam_clone_tool_v2.py
+    
+    - name: Create release notes
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $releaseNotes = @"
+        # Exam Clone Tool v$version
+        
+        ## Features
+        - 🔍 Compare exam files and identify question ID mappings
+        - 🔄 Automatic conflict resolution for duplicate assignments  
+        - 📊 Detailed mapping reports with success statistics
+        - ⚡ Auto-update system with GitHub integration
+        - 🎯 Support for both normal target and comprehensive test files
+        
+        ## Installation
+        1. Download the .exe file below
+        2. Run directly - no installation required
+        3. The tool will automatically check for updates on startup
+        
+        ## System Requirements
+        - Windows 10 or later
+        - Internet connection (for updates)
+        
+        Built with Python 🐍 | Auto-updates via GitHub 🚀
+        "@
+        
+        $releaseNotes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding UTF8
+    
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version.outputs.VERSION }}
+        release_name: Exam Clone Tool v${{ steps.version.outputs.VERSION }}
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+    
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/${{ steps.version.outputs.EXE_NAME }}.exe
+        asset_name: ${{ steps.version.outputs.EXE_NAME }}.exe
+        asset_content_type: application/octet-stream

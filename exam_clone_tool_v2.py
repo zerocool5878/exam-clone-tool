@@ -7,6 +7,7 @@ import subprocess
 import json
 import time
 import threading
+import sys
 try:
     import win32gui
     import win32con
@@ -15,6 +16,164 @@ try:
     CAPTURE_AVAILABLE = True
 except ImportError:
     CAPTURE_AVAILABLE = False
+
+# Application version and update configuration
+VERSION = "1.0.0"
+GITHUB_REPO = "zerocool5878/exam-clone-tool"
+
+# Import auto-updater
+try:
+    from auto_updater import AutoUpdater, create_update_ui
+    AUTO_UPDATE_AVAILABLE = True
+except ImportError:
+    AUTO_UPDATE_AVAILABLE = False
+    print("Auto-updater not available. Update checking disabled.")
+
+def resolve_conflicts(mapping_dict, target_content, exam_content):
+    """
+    Resolve conflicts where multiple exam IDs map to the same target ID.
+    Returns updated mapping with conflicts resolved.
+    """
+    try:
+        target_decoded = html.unescape(target_content)
+        exam_decoded = html.unescape(exam_content)
+        
+        # Find target main IDs with duplicate detection
+        target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
+        target_numbered = target_numbered_pattern.findall(target_decoded)
+        
+        # Check for duplicate target main IDs
+        target_id_counts = {}
+        for q_num, main_id in target_numbered:
+            if main_id in target_id_counts:
+                target_id_counts[main_id].append(f"Q{q_num}")
+            else:
+                target_id_counts[main_id] = [f"Q{q_num}"]
+        
+        duplicate_target_ids = {id: questions for id, questions in target_id_counts.items() if len(questions) > 1}
+        if duplicate_target_ids:
+            print("WARNING: Duplicate target main IDs detected!")
+            for main_id, questions in duplicate_target_ids.items():
+                print(f"  Target ID {main_id} appears in: {', '.join(questions)}")
+        
+        target_main_ids = set(main_id for _, main_id in target_numbered)
+        
+        # Find exam main IDs with duplicate detection
+        exam_numbered = target_numbered_pattern.findall(exam_decoded)
+        
+        # Check for duplicate exam main IDs
+        exam_id_counts = {}
+        for q_num, main_id in exam_numbered:
+            if main_id in exam_id_counts:
+                exam_id_counts[main_id].append(f"Q{q_num}")
+            else:
+                exam_id_counts[main_id] = [f"Q{q_num}"]
+        
+        duplicate_exam_ids = {id: questions for id, questions in exam_id_counts.items() if len(questions) > 1}
+        if duplicate_exam_ids:
+            print("WARNING: Duplicate exam main IDs detected!")
+            for main_id, questions in duplicate_exam_ids.items():
+                print(f"  Exam ID {main_id} appears in: {', '.join(questions)}")
+        
+        exam_main_ids = set(main_id for _, main_id in exam_numbered)
+        
+        # Identify conflicts
+        target_usage = {}
+        conflicts = {}
+        
+        for exam_id, target_id in mapping_dict.items():
+            if target_id in target_usage:
+                # Conflict found
+                if target_id not in conflicts:
+                    conflicts[target_id] = []
+                conflicts[target_id].append(exam_id)
+                conflicts[target_id].append(target_usage[target_id])
+            else:
+                target_usage[target_id] = exam_id
+        
+        print(f"DEBUG: Found {len(conflicts)} conflicted target IDs")
+        
+        # If there are duplicate main IDs, add extra validation
+        if duplicate_target_ids or duplicate_exam_ids:
+            print("DEBUG: Using enhanced validation due to duplicate main IDs")
+        
+        # Resolve conflicts by finding alternative mappings
+        resolved_mapping = mapping_dict.copy()
+        
+        for target_id, conflicted_exam_ids in conflicts.items():
+            print(f"DEBUG: Resolving conflict for target ID {target_id} with exam IDs {conflicted_exam_ids}")
+            
+            # Keep first exam ID, reassign others
+            for i, exam_id in enumerate(conflicted_exam_ids[1:], 1):
+                print(f"DEBUG: Finding alternative for exam ID {exam_id}")
+                
+                # Find exam question section to get alternatives
+                exam_sections = extract_exam_sections(exam_decoded)
+                alternatives = get_alternatives_for_exam_id(exam_id, exam_sections)
+                
+                # Find alternative that doesn't conflict
+                new_target = None
+                forbidden_targets = set(resolved_mapping.values())
+                
+                for alt_id in alternatives:
+                    # Enhanced validation for duplicate main IDs
+                    is_valid_target = alt_id in target_main_ids
+                    is_not_exam_main = alt_id not in exam_main_ids
+                    is_not_forbidden = alt_id not in forbidden_targets
+                    
+                    # Additional check: if target has duplicates, warn but allow
+                    if alt_id in duplicate_target_ids:
+                        print(f"DEBUG: Warning - alternative {alt_id} is a duplicate target ID")
+                    
+                    # Additional check: if alternative is duplicate exam main, reject
+                    if alt_id in duplicate_exam_ids:
+                        print(f"DEBUG: Rejecting alternative {alt_id} - is duplicate exam main ID")
+                        is_not_exam_main = False
+                    
+                    if is_valid_target and is_not_exam_main and is_not_forbidden:
+                        new_target = alt_id
+                        break
+                
+                if new_target:
+                    resolved_mapping[exam_id] = new_target
+                    print(f"DEBUG: Reassigned exam ID {exam_id} from {target_id} to {new_target}")
+                else:
+                    print(f"DEBUG: Could not find alternative for exam ID {exam_id}")
+        
+        return resolved_mapping
+        
+    except Exception as e:
+        print(f"DEBUG: Error in conflict resolution: {e}")
+        return None
+
+def extract_exam_sections(exam_content):
+    """Extract question sections from exam content"""
+    sections = {}
+    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
+    matches = numbered_pattern.findall(exam_content)
+    
+    for i, (q_num, main_id) in enumerate(matches):
+        question_num = int(q_num)
+        
+        if i < len(matches) - 1:
+            next_q_num = int(matches[i+1][0])
+            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
+        else:
+            section_pattern = rf'{question_num}\.\s+.*'
+        
+        section_match = re.search(section_pattern, exam_content, re.DOTALL)
+        if section_match:
+            sections[main_id] = section_match.group(0)
+    
+    return sections
+
+def get_alternatives_for_exam_id(exam_id, exam_sections):
+    """Get alternatives for a specific exam ID"""
+    if exam_id in exam_sections:
+        section_content = exam_sections[exam_id]
+        all_ids = re.findall(r'\(id:(\d+)\)', section_content)
+        return [alt_id for alt_id in all_ids if alt_id != exam_id]
+    return []
 
 def get_browser_windows():
     """Get list of browser windows"""
@@ -1010,6 +1169,17 @@ def create_fixed_mapping_gui():
         
         status_text.insert(tk.END, f"✅ Target mapping created: {len(alt_to_main)} entries\n")
         
+        # Apply conflict resolution
+        status_text.insert(tk.END, "🔄 Checking for conflicts...\n")
+        root.update()
+        
+        resolved_mapping = resolve_conflicts(alt_to_main, target_content['content'], exam_content['content'])
+        if resolved_mapping:
+            alt_to_main = resolved_mapping
+            status_text.insert(tk.END, "✅ Conflicts resolved successfully\n")
+        else:
+            status_text.insert(tk.END, "⚠️ Conflict resolution failed, using original mapping\n")
+        
         # Generate results
         results_text.insert(tk.END, "📄 EXAM CLONE REPORT\n")
         results_text.insert(tk.END, "=" * 70 + "\n")
@@ -1146,5 +1316,49 @@ def create_fixed_mapping_gui():
     
     root.mainloop()
 
-if __name__ == "__main__":
+def check_for_updates_startup():
+    """Check for updates at startup"""
+    if not AUTO_UPDATE_AVAILABLE:
+        return
+    
+    try:
+        print(f"🔍 Checking for updates (Current version: {VERSION})...")
+        updater = AutoUpdater(VERSION, GITHUB_REPO)
+        
+        # Quick check without UI for startup
+        latest_version, download_url, changelog = updater.check_for_updates()
+        
+        if latest_version:
+            print(f"🆕 Update available: {VERSION} → {latest_version}")
+            
+            # Create update UI
+            UpdateWindow = create_update_ui()
+            window = UpdateWindow(updater)
+            
+            # Run update UI
+            root = tk.Tk()
+            root.withdraw()  # Hide main window during update
+            
+            try:
+                window.run()
+            except:
+                pass  # Continue if update UI fails
+            
+            root.destroy()
+        else:
+            print(f"✅ Running latest version: {VERSION}")
+            
+    except Exception as e:
+        print(f"⚠️ Update check failed: {e}")
+        # Continue with normal startup even if update check fails
+
+def main():
+    """Main application entry point with update check"""
+    # Check for updates first
+    check_for_updates_startup()
+    
+    # Start main application
     create_fixed_mapping_gui()
+
+if __name__ == "__main__":
+    main()
