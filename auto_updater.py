@@ -327,8 +327,11 @@ def create_update_ui():
                 )
                 
                 if success:
-                    self.update_progress(100, "Update completed! Restarting...")
-                    self.root.after(1000, self.root.destroy)
+                    self.update_progress(100, "Update completed! Closing...")
+                    self.root.update()
+                    # Close window immediately before exit
+                    self.root.destroy()
+                    # Note: perform_update_check_and_install calls sys.exit(0) after this
                 else:
                     messagebox.showerror("Update Failed", message)
                     self.cancel_btn.config(state=tk.NORMAL)
