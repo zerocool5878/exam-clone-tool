@@ -19,6 +19,12 @@ wheels/
 *.egg-info/
 .installed.cfg
 
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
 # PyInstaller
 *.spec
 temp_build/
