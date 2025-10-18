@@ -118,44 +118,76 @@ class AutoUpdater:
     def apply_update(self, new_exe_path):
         """Apply the update by creating a batch script to replace the exe after exit"""
         try:
-            print("🔄 Applying update...")
+            print("🔄 Preparing update...")
+            
+            # Verify the downloaded file exists
+            if not os.path.exists(new_exe_path):
+                raise Exception(f"Downloaded file not found: {new_exe_path}")
             
             # Get directory paths
             current_dir = os.path.dirname(self.current_exe_path)
             current_exe_name = os.path.basename(self.current_exe_path)
             backup_path = os.path.join(current_dir, f"{current_exe_name}.backup")
             
-            # Create update batch script
-            batch_script = os.path.join(tempfile.gettempdir(), "exam_tool_update.bat")
+            # Create update batch script in temp folder
+            temp_dir = tempfile.gettempdir()
+            batch_script = os.path.join(temp_dir, "exam_tool_update.bat")
+            
+            print(f"📝 Creating update script: {batch_script}")
             
             # Batch script will:
             # 1. Wait for current process to exit
             # 2. Backup current exe
             # 3. Copy new exe to current location
             # 4. Start new exe
-            # 5. Delete itself
+            # 5. Delete temp files and itself
             batch_content = f'''@echo off
+echo Waiting for application to exit...
 timeout /t 2 /nobreak >nul
+
 echo Backing up current version...
-copy /Y "{self.current_exe_path}" "{backup_path}" >nul
+if exist "{self.current_exe_path}" (
+    copy /Y "{self.current_exe_path}" "{backup_path}" >nul
+)
+
 echo Installing update...
 copy /Y "{new_exe_path}" "{self.current_exe_path}" >nul
+
+if errorlevel 1 (
+    echo Update failed!
+    pause
+    exit /b 1
+)
+
 echo Starting updated application...
 start "" "{self.current_exe_path}"
+
 echo Cleaning up...
-del /F /Q "{new_exe_path}" >nul
+timeout /t 1 /nobreak >nul
+del /F /Q "{new_exe_path}" >nul 2>nul
 rmdir "{os.path.dirname(new_exe_path)}" >nul 2>nul
-del /F /Q "%~f0" >nul
+del /F /Q "%~f0" >nul 2>nul
 '''
             
+            # Write batch script
             with open(batch_script, 'w') as f:
                 f.write(batch_content)
             
-            print(f"✅ Update script created: {batch_script}")
+            print(f"✅ Update script created successfully")
+            print(f"   Current EXE: {self.current_exe_path}")
+            print(f"   New EXE: {new_exe_path}")
+            print(f"   Backup: {backup_path}")
             
-            # Launch the update script and exit
-            subprocess.Popen(['cmd', '/c', batch_script], 
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+            # Launch the update script silently
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            
+            subprocess.Popen(
+                ['cmd', '/c', batch_script],
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
             
             print("🔄 Update will complete after application exits...")
             
@@ -163,6 +195,8 @@ del /F /Q "%~f0" >nul
             
         except Exception as e:
             print(f"❌ Update preparation failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def restart_application(self):
