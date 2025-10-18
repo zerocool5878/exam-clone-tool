@@ -37,7 +37,7 @@ jobs:
     
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --name "${{ steps.version.outputs.EXE_NAME }}" --add-data "auto_updater.py;." exam_clone_tool_v2.py
+        pyinstaller --onefile --windowed --name "${{ steps.version.outputs.EXE_NAME }}" --icon=test_icon.ico --add-data "auto_updater.py;." exam_clone_tool_v2.py
     
     - name: Create release notes
       run: |
