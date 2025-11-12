@@ -20,7 +20,7 @@ except ImportError:
     CAPTURE_AVAILABLE = False
 
 # Application version and update configuration
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 GITHUB_REPO = "zerocool5878/exam-clone-tool"
 
 # Import auto-updater
