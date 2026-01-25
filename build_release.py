@@ -24,13 +24,40 @@ def build_executable():
     
     print(f"🔨 Building executable: {exe_name}.exe")
     
-    # PyInstaller command
+    # PyInstaller command with all required hidden imports for browser capture
     cmd = [
         'pyinstaller',
         '--onefile',                    # Single file
         '--windowed',                   # No console window
         '--name', exe_name,             # Executable name
         '--add-data', 'auto_updater.py;.',  # Include auto_updater
+        # Hidden imports for pywin32 (browser capture)
+        '--hidden-import', 'win32gui',
+        '--hidden-import', 'win32con',
+        '--hidden-import', 'win32clipboard',
+        '--hidden-import', 'win32api',
+        '--hidden-import', 'pywintypes',
+        '--hidden-import', 'pythoncom',
+        # Hidden imports for pyautogui
+        '--hidden-import', 'pyautogui',
+        '--hidden-import', 'pyscreeze',
+        '--hidden-import', 'pygetwindow',
+        '--hidden-import', 'pymsgbox',
+        '--hidden-import', 'pytweening',
+        '--hidden-import', 'mouseinfo',
+        # Hidden imports for PIL (used by pyautogui)
+        '--hidden-import', 'PIL',
+        '--hidden-import', 'PIL._tkinter_finder',
+        # Hidden imports for requests (auto-updater)
+        '--hidden-import', 'requests',
+        '--hidden-import', 'urllib3',
+        '--hidden-import', 'certifi',
+        '--hidden-import', 'charset_normalizer',
+        '--hidden-import', 'idna',
+        # Collect all data for pywin32
+        '--collect-all', 'win32',
+        '--collect-all', 'pywin32',
+        '--collect-all', 'pyautogui',
         'exam_clone_tool_v2.py'         # Main script
     ]
     
