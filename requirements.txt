@@ -1,3 +1,5 @@
 requests>=2.25.0
-pywin32>=227
-pyautogui>=0.9.50
+
+# Optional - required for browser capture feature
+pywin32>=305
+pyautogui>=0.9.53

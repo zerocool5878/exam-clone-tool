@@ -20,7 +20,7 @@ except ImportError:
     CAPTURE_AVAILABLE = False
 
 # Application version and update configuration
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 GITHUB_REPO = "zerocool5878/exam-clone-tool"
 
 # Import auto-updater
@@ -30,6 +30,151 @@ try:
 except ImportError:
     AUTO_UPDATE_AVAILABLE = False
     print("Auto-updater not available. Update checking disabled.")
+
+
+def find_maximum_bipartite_matching(exam_questions, target_ids, question_options):
+    """
+    Find maximum bipartite matching between exam questions and target IDs.
+    Uses augmenting path algorithm (Hopcroft-Karp style) with DFS.
+    
+    Args:
+        exam_questions: list of exam question identifiers (e.g., question numbers)
+        target_ids: set of target IDs we need to match to
+        question_options: dict mapping question -> list of valid target IDs it can become
+    
+    Returns:
+        dict mapping exam_question -> target_id, or None if no complete matching exists
+    """
+    logging.debug(f"=== BIPARTITE MATCHING ===")
+    logging.debug(f"Exam questions to match: {len(exam_questions)}")
+    logging.debug(f"Target IDs available: {len(target_ids)}")
+    
+    # Build adjacency list: question -> list of possible targets
+    graph = {q: list(opts) for q, opts in question_options.items()}
+    
+    # Track which target is matched to which question
+    target_to_question = {}  # target_id -> question
+    question_to_target = {}  # question -> target_id
+    
+    def find_augmenting_path(question, visited):
+        """DFS to find augmenting path from question"""
+        for target in graph.get(question, []):
+            if target in visited:
+                continue
+            visited.add(target)
+            
+            # If target is unmatched, or we can find alternating path from its current match
+            if target not in target_to_question:
+                # Unmatched target - we can use it
+                return [(question, target)]
+            else:
+                # Target is matched - try to find augmenting path from the matched question
+                matched_question = target_to_question[target]
+                aug_path = find_augmenting_path(matched_question, visited)
+                if aug_path is not None:
+                    return [(question, target)] + aug_path
+        return None
+    
+    # Try to match each question using augmenting paths
+    for question in exam_questions:
+        if question in question_to_target:
+            continue  # Already matched
+            
+        # Find augmenting path starting from this question
+        visited = set()
+        aug_path = find_augmenting_path(question, visited)
+        
+        if aug_path:
+            # Apply the augmenting path - flip all matchings along the path
+            for q, t in aug_path:
+                if t in target_to_question:
+                    old_q = target_to_question[t]
+                    if old_q in question_to_target:
+                        del question_to_target[old_q]
+                target_to_question[t] = q
+                question_to_target[q] = t
+            logging.debug(f"Matched Q{question} via augmenting path of length {len(aug_path)}")
+        else:
+            logging.debug(f"Could not find augmenting path for Q{question}")
+    
+    # Check if we got a complete matching
+    matched_count = len(question_to_target)
+    total_questions = len(exam_questions)
+    logging.debug(f"Matching result: {matched_count}/{total_questions} questions matched")
+    
+    if matched_count < total_questions:
+        unmatched = [q for q in exam_questions if q not in question_to_target]
+        logging.debug(f"Unmatched questions: {unmatched}")
+        return None
+    
+    return question_to_target
+
+
+def solve_exam_matching_with_backtracking(questions_info, target_main_ids, already_matched):
+    """
+    Solve the exam-to-target matching problem with backtracking.
+    
+    Args:
+        questions_info: dict of {question_num: {'current_id': X, 'options': [valid_targets]}}
+        target_main_ids: set of all target main IDs
+        already_matched: set of target IDs already matched (from questions that don't need change)
+    
+    Returns:
+        dict mapping current_exam_id -> new_target_id for questions that need changes
+    """
+    logging.debug(f"=== BACKTRACKING SOLVER ===")
+    logging.debug(f"Questions needing change: {len(questions_info)}")
+    logging.debug(f"Already matched: {len(already_matched)}")
+    
+    # Sort questions by number of options (most constrained first - MRV heuristic)
+    sorted_questions = sorted(questions_info.items(), key=lambda x: len(x[1]['options']))
+    question_order = [q for q, _ in sorted_questions]
+    
+    logging.debug(f"Question order (by constraint): {question_order}")
+    for q, info in sorted_questions:
+        logging.debug(f"  Q{q}: {len(info['options'])} options -> {info['options']}")
+    
+    # Used targets - start with already matched
+    used_targets = set(already_matched)
+    
+    # Result mapping
+    result = {}
+    
+    def backtrack(idx):
+        """Recursive backtracking solver"""
+        if idx >= len(question_order):
+            return True  # All questions assigned
+        
+        q_num = question_order[idx]
+        info = questions_info[q_num]
+        current_id = info['current_id']
+        
+        # Try each available option
+        for target_id in info['options']:
+            if target_id not in used_targets:
+                # Try this assignment
+                used_targets.add(target_id)
+                result[current_id] = target_id
+                
+                logging.debug(f"  Trying Q{q_num}: {current_id} -> {target_id}")
+                
+                if backtrack(idx + 1):
+                    return True
+                
+                # Backtrack
+                used_targets.remove(target_id)
+                del result[current_id]
+                logging.debug(f"  Backtracking Q{q_num}")
+        
+        return False
+    
+    if backtrack(0):
+        logging.debug(f"Backtracking found solution with {len(result)} mappings")
+        return result
+    else:
+        logging.debug("Backtracking could not find complete solution")
+        return None
+
 
 def resolve_conflicts(mapping_dict, target_content, exam_content):
     """
@@ -490,7 +635,7 @@ def extract_comp_test_mapping_from_content(target_content, exam_content):
             else:
                 logging.debug(f"Q{question_num}: needs change but has NO valid alternatives!")
 
-        # STEP 3: Perfect matching - assign alternatives to ensure all target IDs are covered
+        # STEP 3: Perfect matching using backtracking solver for optimal assignment
         exam_to_target_mapping = {}
         used_target_ids = set()
         
@@ -505,50 +650,79 @@ def extract_comp_test_mapping_from_content(target_content, exam_content):
         logging.debug(f"Starting conflict resolution. {len(questions_needing_change)} questions need changes")
         logging.debug(f"Already matched target IDs: {sorted(used_target_ids)}")
 
-        # Iterative greedy assignment with constraint propagation
-        max_iterations = 20
-        iteration = 0
-        
-        while questions_needing_change and iteration < max_iterations:
-            iteration += 1
-            logging.debug(f"=== ITERATION {iteration} ===")
-            
-            # Filter out already-used target IDs from each question's options
-            for q_num in list(questions_needing_change.keys()):
-                original_options = questions_needing_change[q_num]['options']
-                available_options = [opt for opt in original_options if opt not in used_target_ids]
-                
-                if not available_options:
-                    logging.debug(f"Q{q_num}: ran out of options - cannot resolve!")
-                    del questions_needing_change[q_num]
-                else:
-                    questions_needing_change[q_num]['available_options'] = available_options
-            
-            if not questions_needing_change:
-                break
-            
-            # Sort by flexibility: questions with fewer options go first
-            sorted_questions = sorted(questions_needing_change.items(),
-                                     key=lambda x: len(x[1]['available_options']))
-            
-            # Assign the most constrained question
-            q_num, info = sorted_questions[0]
-            available = info['available_options']
-            
-            if available:
-                chosen_target = available[0]  # Pick first available
-                current_id = info['current_id']
-                
-                # Make assignment
-                exam_to_target_mapping[current_id] = chosen_target
-                used_target_ids.add(chosen_target)
-                
-                logging.debug(f"Q{q_num}: {current_id} -> {chosen_target} (had {len(available)} options)")
-                
-                # Remove this question
-                del questions_needing_change[q_num]
-        
+        # Use backtracking solver for optimal assignment
         if questions_needing_change:
+            # Filter options to exclude already-used targets
+            filtered_questions = {}
+            for q_num, info in questions_needing_change.items():
+                filtered_options = [opt for opt in info['options'] if opt not in used_target_ids]
+                if filtered_options:
+                    filtered_questions[q_num] = {
+                        'current_id': info['current_id'],
+                        'options': filtered_options
+                    }
+                else:
+                    logging.debug(f"Q{q_num}: no valid options after filtering already-used targets")
+            
+            if filtered_questions:
+                # Try backtracking solver first
+                backtrack_result = solve_exam_matching_with_backtracking(
+                    filtered_questions, target_main_ids, used_target_ids
+                )
+                
+                if backtrack_result:
+                    exam_to_target_mapping = backtrack_result
+                    logging.debug(f"Backtracking solver succeeded with {len(backtrack_result)} mappings")
+                else:
+                    # Fallback to bipartite matching
+                    logging.debug("Backtracking failed, trying bipartite matching...")
+                    question_list = list(filtered_questions.keys())
+                    question_options = {q: info['options'] for q, info in filtered_questions.items()}
+                    
+                    bipartite_result = find_maximum_bipartite_matching(
+                        question_list, target_main_ids - used_target_ids, question_options
+                    )
+                    
+                    if bipartite_result:
+                        # Convert from question_num -> target to current_id -> target
+                        for q_num, target_id in bipartite_result.items():
+                            current_id = filtered_questions[q_num]['current_id']
+                            exam_to_target_mapping[current_id] = target_id
+                        logging.debug(f"Bipartite matching succeeded with {len(exam_to_target_mapping)} mappings")
+                    else:
+                        # Final fallback: greedy with constraint propagation
+                        logging.debug("Both solvers failed, using greedy fallback...")
+                        max_iterations = 50
+                        iteration = 0
+                        temp_questions = dict(filtered_questions)
+                        temp_used = set(used_target_ids)
+                        
+                        while temp_questions and iteration < max_iterations:
+                            iteration += 1
+                            
+                            # Update available options
+                            for q_num in list(temp_questions.keys()):
+                                available = [opt for opt in temp_questions[q_num]['options'] if opt not in temp_used]
+                                if not available:
+                                    del temp_questions[q_num]
+                                else:
+                                    temp_questions[q_num]['available'] = available
+                            
+                            if not temp_questions:
+                                break
+                            
+                            # Most constrained first
+                            sorted_qs = sorted(temp_questions.items(), key=lambda x: len(x[1].get('available', [])))
+                            q_num, info = sorted_qs[0]
+                            available = info.get('available', [])
+                            
+                            if available:
+                                chosen = available[0]
+                                exam_to_target_mapping[info['current_id']] = chosen
+                                temp_used.add(chosen)
+                                del temp_questions[q_num]
+
+        if not exam_to_target_mapping and questions_needing_change:
             remaining = list(questions_needing_change.keys())
             logging.debug(f"ERROR: Could not resolve {len(remaining)} questions: {remaining}")
             return None, f"Could not find valid alternatives for questions: {remaining}"
@@ -579,13 +753,11 @@ def extract_comp_test_mapping_from_content(target_content, exam_content):
     
 def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
     """
-    Extract mapping for comp_test scenario using POSITIONAL matching
+    Extract mapping for comp_test scenario using smart matching with backtracking
     - comp_test_filepath: target file (contains the correct answers)
     - exam_filepath: exam file (current selections to compare against target)
     
-    CORRECT Logic: Position-based matching
-    - Exam Q8 should get alternatives from Target Q8 (same position)
-    - NOT based on ID matching across different question numbers
+    Uses the improved content-based algorithm with backtracking solver.
     """
     import logging
     logging.basicConfig(filename='debug_log.txt', level=logging.DEBUG, format='%(asctime)s %(message)s')
@@ -601,119 +773,8 @@ def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
     except Exception as e:
         return None, f"Error reading files: {e}"
     
-    target_decoded = html.unescape(target_content)
-    exam_decoded = html.unescape(exam_content)
-    
-    # Extract target numbered questions (main questions in target)
-    target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    target_numbered = target_numbered_pattern.findall(target_decoded)
-    target_sorted = sorted(target_numbered, key=lambda x: int(x[0]))
-    
-    print(f"DEBUG: Target has {len(target_sorted)} main questions")
-    
-    # Create set of target main IDs for quick lookup
-    target_main_ids = set(qid for _, qid in target_sorted)
-    
-    # Build target question sections with all their alternatives
-    target_alternatives_map = {}  # alternative_id -> main_id
-    
-    for i, (target_q_num, target_main_id) in enumerate(target_sorted):
-        question_num = int(target_q_num)
-        
-        # Extract this target question's section (including alternatives)
-        if i < len(target_sorted) - 1:
-            next_q_num = int(target_sorted[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        section_match = re.search(section_pattern, target_decoded, re.DOTALL)
-        
-        if section_match:
-            section_content = section_match.group(0)
-            section_ids = re.findall(r'\(id:(\d+)\)', section_content)
-            section_unique = list(dict.fromkeys(section_ids))
-            
-            # Map all IDs in this target section to the main ID
-            for alt_id in section_unique:
-                target_alternatives_map[alt_id] = target_main_id
-            
-            print(f"DEBUG: Target Q{question_num} (main:{target_main_id}) has {len(section_unique)} IDs")
-    
-    # Extract exam numbered questions with their alternatives
-    exam_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    exam_numbered = exam_numbered_pattern.findall(exam_decoded)
-    exam_sorted = sorted(exam_numbered, key=lambda x: int(x[0]))
-    
-    print(f"DEBUG: Exam has {len(exam_sorted)} questions")
-    
-    # CORRECT APPROACH: Alternative-based matching
-    # For each exam question, find its alternatives and see which target main ID they match
-    exam_to_target_mapping = {}
-    
-    # Create set of all target main IDs for quick lookup
-    target_main_ids = set(main_id for _, main_id in target_sorted)
-    
-    # Create set of all exam main IDs to avoid conflicts
-    exam_main_ids = set(main_id for _, main_id in exam_sorted)
-    print(f"DEBUG: Exam main IDs: {sorted(exam_main_ids)}")
-    print(f"DEBUG: Target main IDs: {sorted(target_main_ids)}")
-    
-    for i, (exam_q_num, exam_main_id) in enumerate(exam_sorted):
-        question_num = int(exam_q_num)
-        
-        print(f"DEBUG: Processing exam Q{question_num} (current ID: {exam_main_id})")
-        
-        # FIRST: Check if current exam ID is already a target main ID
-        if exam_main_id in target_main_ids:
-            print(f"DEBUG: Q{question_num} current ID {exam_main_id} is already a target main ID - no change needed")
-            continue
-        
-        # Extract exam question section to find all its alternatives
-        if i < len(exam_sorted) - 1:
-            next_exam_q_num = int(exam_sorted[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_exam_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        exam_section_match = re.search(section_pattern, exam_decoded, re.DOTALL)
-        
-        if exam_section_match:
-            exam_section_content = exam_section_match.group(0)
-            exam_section_ids = re.findall(r'\(id:(\d+)\)', exam_section_content)
-            exam_unique_ids = list(dict.fromkeys(exam_section_ids))
-            
-            # Get alternatives (excluding current main ID)
-            exam_alternatives = [alt_id for alt_id in exam_unique_ids if alt_id != exam_main_id]
-            
-            print(f"DEBUG: Exam Q{question_num} has alternatives: {exam_alternatives}")
-            
-            # IMPROVED: Check alternatives against target main IDs, avoiding conflicts
-            matching_alternative = None
-            for alt_id in exam_alternatives:
-                if alt_id in target_main_ids:
-                    # Check if this target main ID is NOT already used as a main ID in exam
-                    if alt_id not in exam_main_ids:
-                        matching_alternative = alt_id
-                        # Find which target question this matches
-                        for target_q_num, target_main_id in target_sorted:
-                            if target_main_id == alt_id:
-                                print(f"DEBUG: Exam Q{question_num} alternative {alt_id} matches target Q{target_q_num} (conflict-free)")
-                                break
-                        break
-                    else:
-                        print(f"DEBUG: Exam Q{question_num} alternative {alt_id} matches target main ID but conflicts with exam Q - skipping")
-            
-            if matching_alternative:
-                exam_to_target_mapping[exam_main_id] = matching_alternative
-                print(f"DEBUG: Q{question_num} should change from {exam_main_id} -> {matching_alternative}")
-            else:
-                print(f"DEBUG: Q{question_num} - no alternatives match any target main ID")
-        else:
-            print(f"DEBUG: Q{question_num} - could not extract section")
-
-    print(f"DEBUG: Total alternative-based mappings: {len(exam_to_target_mapping)}")
-    return exam_to_target_mapping, None
+    # Use the improved content-based algorithm
+    return extract_comp_test_mapping_from_content(target_content, exam_content)
 
 def extract_target_mapping_from_content(content):
     """Extract alternative-to-main mapping from HTML content"""

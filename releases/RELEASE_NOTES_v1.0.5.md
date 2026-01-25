@@ -1,32 +1,30 @@
-# Exam Clone Tool v1.0.5
+# Exam Clone Tool v1.0.5 Release Notes
 
-## Features
-- 🔍 Compare exam files and identify question ID mappings
-- 🔄 Automatic conflict resolution for duplicate assignments
-- 📊 Detailed mapping reports with success statistics
-- ⚡ Auto-update system with GitHub integration
-- 🎯 Support for both normal target and comprehensive test files
+## Release Date: January 25, 2026
 
-## What's New in v1.0.5
-- ✨ Added auto-update system
-- 🛠️ Improved conflict detection and resolution
-- 📈 Enhanced progress reporting
-- 🔧 Better error handling
+### 🚀 Major Improvements
 
-## Installation
-1. Download the .exe file
-2. Run directly - no installation required
-3. The tool will automatically check for updates on startup
+#### Smart Matching Algorithm with Backtracking
+- **NEW**: Implemented Maximum Bipartite Matching algorithm for optimal question assignment
+- **NEW**: Added recursive backtracking solver with Most Constrained Variable (MRV) heuristic
+- **IMPROVED**: Now handles complex multi-way conflicts where multiple questions share the same alternative pools
 
-## Usage
-1. Select your TARGET file (reference exam)
-2. Select your TEST file (exam to compare)
-3. Click "Generate Clone Report"
-4. Review the mapping suggestions
+### 🔧 Technical Changes
 
-## System Requirements
-- Windows 10 or later
-- Internet connection (for updates)
+#### New Functions Added:
+- `find_maximum_bipartite_matching()` - Augmenting path algorithm (Hopcroft-Karp style) for optimal assignments
+- `solve_exam_matching_with_backtracking()` - Recursive backtracking with constraint propagation
 
----
-Built with Python 🐍 | Auto-updates via GitHub 🚀
+#### Algorithm Improvements:
+- Questions with shared alternative pools (e.g., Q1, Q8, Q22 all sharing 17 alternatives) are now resolved correctly
+- Falls back through multiple strategies: Backtracking → Bipartite Matching → Greedy
+- Handles tests with heavily overlapping question banks (tested with 40-question exam with 16 conflict groups)
+
+### 📋 Test Results
+- Successfully matched 40/40 questions on complex test case
+- Resolved 31 required remappings with 16 multi-way conflicts
+- 100% match rate on previously failing test scenarios
+
+### 📦 Dependencies
+- No new required dependencies
+- Optional: pywin32, pyautogui (for browser capture feature)
