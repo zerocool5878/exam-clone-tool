@@ -36,12 +36,31 @@ jobs:
         echo "EXE_NAME=Exam_Clone_Tool_v$version" >> $env:GITHUB_OUTPUT
     
     - name: Build executable
+      # Keep this flag list in sync with build_release.py so the CI exe bundles
+      # everything the browser-capture and auto-update features need.
       run: |
-        pyinstaller --onefile --windowed --name "${{ steps.version.outputs.EXE_NAME }}" --icon=test_icon.ico --add-data "auto_updater.py;." exam_clone_tool_v2.py
+        pyinstaller --onefile --windowed --name "${{ steps.version.outputs.EXE_NAME }}" --icon=test_icon.ico `
+          --add-data "auto_updater.py;." `
+          --hidden-import win32gui --hidden-import win32con --hidden-import win32clipboard `
+          --hidden-import win32api --hidden-import pywintypes --hidden-import pythoncom `
+          --hidden-import pyautogui --hidden-import pyscreeze --hidden-import pygetwindow `
+          --hidden-import pymsgbox --hidden-import pytweening --hidden-import mouseinfo `
+          --hidden-import PIL --hidden-import PIL._tkinter_finder `
+          --hidden-import requests --hidden-import urllib3 --hidden-import certifi `
+          --hidden-import charset_normalizer --hidden-import idna `
+          --collect-all win32 --collect-all pywin32 --collect-all pyautogui `
+          exam_clone_tool_v2.py
+        if (-not (Test-Path "dist/${{ steps.version.outputs.EXE_NAME }}.exe")) { throw "Executable was not produced" }
     
     - name: Create release notes
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
+        $versionNotes = "releases/RELEASE_NOTES_v$version.md"
+        if (Test-Path $versionNotes) {
+          Copy-Item $versionNotes "RELEASE_NOTES.md"
+          Write-Host "Using version-specific notes from $versionNotes"
+          exit 0
+        }
         $releaseNotes = @"
         # Exam Clone Tool v$version
         

@@ -20,7 +20,7 @@ except ImportError:
     CAPTURE_AVAILABLE = False
 
 # Application version and update configuration
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 GITHUB_REPO = "zerocool5878/exam-clone-tool"
 
 # Import auto-updater
@@ -32,299 +32,188 @@ except ImportError:
     print("Auto-updater not available. Update checking disabled.")
 
 
-def find_maximum_bipartite_matching(exam_questions, target_ids, question_options):
+# ---------------------------------------------------------------------------
+# Source normalisation and question parsing
+# ---------------------------------------------------------------------------
+
+# A saved Chrome "view-source:" page keeps each original line in one of these cells,
+# with the original tags entity-escaped and wrapped in highlighting <span>s.
+VIEW_SOURCE_CELL = re.compile(r'<td class="line-content">(.*?)</td></tr>', re.S)
+HTML_TAG = re.compile(r'<[^>]+>')
+# A main question exactly as the LMS renders it:
+#   7. <span id="question-plaintext136761">(id:126107)...
+# Anchoring on the span is what stops prose such as "...multiplier is 3.86. The radius..."
+# from being mistaken for question 86.
+MAIN_QUESTION = re.compile(r'(\d+)\.\s*<span[^>]*\bid="question-plaintext\d+"[^>]*>\s*\(id:(\d+)\)')
+ANY_ID = re.compile(r'\(id:(\d+)\)')
+
+
+def normalize_source(content):
+    """Return the page's real HTML.
+
+    Accepts either the raw page source (what the browser-capture path copies out of
+    the view-source tab) or a saved Chrome view-source page.
     """
-    Find maximum bipartite matching between exam questions and target IDs.
-    Uses augmenting path algorithm (Hopcroft-Karp style) with DFS.
-    
-    Args:
-        exam_questions: list of exam question identifiers (e.g., question numbers)
-        target_ids: set of target IDs we need to match to
-        question_options: dict mapping question -> list of valid target IDs it can become
-    
-    Returns:
-        dict mapping exam_question -> target_id, or None if no complete matching exists
+    if not content:
+        return ""
+    if 'class="line-content"' in content:
+        cells = VIEW_SOURCE_CELL.findall(content)
+        if cells:
+            return "\n".join(html.unescape(HTML_TAG.sub('', cell)) for cell in cells)
+    return content
+
+
+def parse_questions(content):
+    """Parse an exam edit page into its numbered questions.
+
+    Returns (questions, error). Each question is a dict:
+        {'num': 7, 'main': '126107', 'alts': ['126108', '132165', ...]}
+    where 'alts' are the alternate question IDs offered in that question's
+    replacement template (everything from this question up to the next one).
     """
-    logging.debug(f"=== BIPARTITE MATCHING ===")
-    logging.debug(f"Exam questions to match: {len(exam_questions)}")
-    logging.debug(f"Target IDs available: {len(target_ids)}")
-    
-    # Build adjacency list: question -> list of possible targets
-    graph = {q: list(opts) for q, opts in question_options.items()}
-    
-    # Track which target is matched to which question
-    target_to_question = {}  # target_id -> question
-    question_to_target = {}  # question -> target_id
-    
-    def find_augmenting_path(question, visited):
-        """DFS to find augmenting path from question"""
-        for target in graph.get(question, []):
-            if target in visited:
-                continue
-            visited.add(target)
-            
-            # If target is unmatched, or we can find alternating path from its current match
-            if target not in target_to_question:
-                # Unmatched target - we can use it
-                return [(question, target)]
-            else:
-                # Target is matched - try to find augmenting path from the matched question
-                matched_question = target_to_question[target]
-                aug_path = find_augmenting_path(matched_question, visited)
-                if aug_path is not None:
-                    return [(question, target)] + aug_path
-        return None
-    
-    # Try to match each question using augmenting paths
-    for question in exam_questions:
-        if question in question_to_target:
-            continue  # Already matched
-            
-        # Find augmenting path starting from this question
-        visited = set()
-        aug_path = find_augmenting_path(question, visited)
-        
-        if aug_path:
-            # Apply the augmenting path - flip all matchings along the path
-            for q, t in aug_path:
-                if t in target_to_question:
-                    old_q = target_to_question[t]
-                    if old_q in question_to_target:
-                        del question_to_target[old_q]
-                target_to_question[t] = q
-                question_to_target[q] = t
-            logging.debug(f"Matched Q{question} via augmenting path of length {len(aug_path)}")
-        else:
-            logging.debug(f"Could not find augmenting path for Q{question}")
-    
-    # Check if we got a complete matching
-    matched_count = len(question_to_target)
-    total_questions = len(exam_questions)
-    logging.debug(f"Matching result: {matched_count}/{total_questions} questions matched")
-    
-    if matched_count < total_questions:
-        unmatched = [q for q in exam_questions if q not in question_to_target]
-        logging.debug(f"Unmatched questions: {unmatched}")
-        return None
-    
-    return question_to_target
+    source = normalize_source(content)
+    matches = list(MAIN_QUESTION.finditer(source))
+    if not matches:
+        return None, 'No numbered questions found (expected: N. <span id="question-plaintext...">(id:...))'
+
+    questions = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(source)
+        main_id = m.group(2)
+        ids = list(dict.fromkeys(ANY_ID.findall(source[m.start():end])))
+        questions.append({
+            'num': int(m.group(1)),
+            'main': main_id,
+            'alts': [x for x in ids if x != main_id],
+        })
+
+    questions.sort(key=lambda q: q['num'])
+    nums = [q['num'] for q in questions]
+    if len(set(nums)) != len(nums):
+        dupes = sorted({n for n in nums if nums.count(n) > 1})
+        return None, f"Duplicate question numbers found: {dupes}"
+    logging.debug(f"Parsed {len(questions)} questions: " +
+                  ", ".join(f"Q{q['num']}={q['main']}(+{len(q['alts'])} alts)" for q in questions))
+    return questions, None
 
 
-def solve_exam_matching_with_backtracking(questions_info, target_main_ids, already_matched):
-    """
-    Solve the exam-to-target matching problem with backtracking.
-    
-    Args:
-        questions_info: dict of {question_num: {'current_id': X, 'options': [valid_targets]}}
-        target_main_ids: set of all target main IDs
-        already_matched: set of target IDs already matched (from questions that don't need change)
-    
-    Returns:
-        dict mapping current_exam_id -> new_target_id for questions that need changes
-    """
-    logging.debug(f"=== BACKTRACKING SOLVER ===")
-    logging.debug(f"Questions needing change: {len(questions_info)}")
-    logging.debug(f"Already matched: {len(already_matched)}")
-    
-    # Sort questions by number of options (most constrained first - MRV heuristic)
-    sorted_questions = sorted(questions_info.items(), key=lambda x: len(x[1]['options']))
-    question_order = [q for q, _ in sorted_questions]
-    
-    logging.debug(f"Question order (by constraint): {question_order}")
-    for q, info in sorted_questions:
-        logging.debug(f"  Q{q}: {len(info['options'])} options -> {info['options']}")
-    
-    # Used targets - start with already matched
-    used_targets = set(already_matched)
-    
-    # Result mapping
-    result = {}
-    
-    def backtrack(idx):
-        """Recursive backtracking solver"""
-        if idx >= len(question_order):
-            return True  # All questions assigned
-        
-        q_num = question_order[idx]
-        info = questions_info[q_num]
-        current_id = info['current_id']
-        
-        # Try each available option
-        for target_id in info['options']:
-            if target_id not in used_targets:
-                # Try this assignment
-                used_targets.add(target_id)
-                result[current_id] = target_id
-                
-                logging.debug(f"  Trying Q{q_num}: {current_id} -> {target_id}")
-                
-                if backtrack(idx + 1):
-                    return True
-                
-                # Backtrack
-                used_targets.remove(target_id)
-                del result[current_id]
-                logging.debug(f"  Backtracking Q{q_num}")
-        
-        return False
-    
-    if backtrack(0):
-        logging.debug(f"Backtracking found solution with {len(result)} mappings")
-        return result
-    else:
-        logging.debug("Backtracking could not find complete solution")
-        return None
+# ---------------------------------------------------------------------------
+# Matching: make the test's set of main question IDs identical to the target's
+# ---------------------------------------------------------------------------
+
+COST_KEEP = 0           # test question keeps its current main ID
+COST_CHANGE = 1         # test question switches to one of its alternates
+COST_DUMMY = 10         # padding when the two exams have different question counts
+COST_IMPOSSIBLE = 1000  # the target ID is not reachable from this question at all
 
 
-def resolve_conflicts(mapping_dict, target_content, exam_content):
-    """
-    Resolve conflicts where multiple exam IDs map to the same target ID.
-    Returns updated mapping with conflicts resolved.
-    """
-    try:
-        target_decoded = html.unescape(target_content)
-        exam_decoded = html.unescape(exam_content)
-
-        # Find target main IDs with duplicate detection
-        target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-        target_numbered = target_numbered_pattern.findall(target_decoded)
-
-        # Check for duplicate target main IDs
-        target_id_counts = {}
-        for q_num, main_id in target_numbered:
-            if main_id in target_id_counts:
-                target_id_counts[main_id].append(f"Q{q_num}")
-            else:
-                target_id_counts[main_id] = [f"Q{q_num}"]
-
-        duplicate_target_ids = {id: questions for id, questions in target_id_counts.items() if len(questions) > 1}
-        if duplicate_target_ids:
-            logging.debug("WARNING: Duplicate target main IDs detected!")
-            for main_id, questions in duplicate_target_ids.items():
-                logging.debug(f"  Target ID {main_id} appears in: {', '.join(questions)}")
-
-        target_main_ids = set(main_id for _, main_id in target_numbered)
-
-        # Find exam main IDs with duplicate detection
-        exam_numbered = target_numbered_pattern.findall(exam_decoded)
-
-        # Check for duplicate exam main IDs
-        exam_id_counts = {}
-        for q_num, main_id in exam_numbered:
-            if main_id in exam_id_counts:
-                exam_id_counts[main_id].append(f"Q{q_num}")
-            else:
-                exam_id_counts[main_id] = [f"Q{q_num}"]
-
-        duplicate_exam_ids = {id: questions for id, questions in exam_id_counts.items() if len(questions) > 1}
-        if duplicate_exam_ids:
-            logging.debug("WARNING: Duplicate exam main IDs detected!")
-            for main_id, questions in duplicate_exam_ids.items():
-                logging.debug(f"  Exam ID {main_id} appears in: {', '.join(questions)}")
-
-        exam_main_ids = set(main_id for _, main_id in exam_numbered)
-
-        # Identify conflicts
-        target_usage = {}
-        conflicts = {}
-
-        for exam_id, target_id in mapping_dict.items():
-            if target_id in target_usage:
-                # Conflict found
-                if target_id not in conflicts:
-                    conflicts[target_id] = []
-                conflicts[target_id].append(exam_id)
-                conflicts[target_id].append(target_usage[target_id])
-            else:
-                target_usage[target_id] = exam_id
-
-        logging.debug(f"Found {len(conflicts)} conflicted target IDs")
-
-        # If there are duplicate main IDs, add extra validation
-        if duplicate_target_ids or duplicate_exam_ids:
-            logging.debug("Using enhanced validation due to duplicate main IDs")
-
-        # Resolve conflicts by finding alternative mappings
-        resolved_mapping = mapping_dict.copy()
-
-        for target_id, conflicted_exam_ids in conflicts.items():
-            logging.debug(f"Resolving conflict for target ID {target_id} with exam IDs {conflicted_exam_ids}")
-
-            # Keep first exam ID, reassign others
-            for i, exam_id in enumerate(conflicted_exam_ids[1:], 1):
-                logging.debug(f"Finding alternative for exam ID {exam_id}")
-
-                # Find exam question section to get alternatives
-                exam_sections = extract_exam_sections(exam_decoded)
-                alternatives = get_alternatives_for_exam_id(exam_id, exam_sections)
-
-                # Find alternative that doesn't conflict
-                new_target = None
-                forbidden_targets = set(resolved_mapping.values())
-
-                for alt_id in alternatives:
-                    # Enhanced validation for duplicate main IDs
-                    is_valid_target = alt_id in target_main_ids
-                    is_not_exam_main = alt_id not in exam_main_ids
-                    is_not_forbidden = alt_id not in forbidden_targets
-
-                    # Additional check: if target has duplicates, warn but allow
-                    if alt_id in duplicate_target_ids:
-                        logging.debug(f"Warning - alternative {alt_id} is a duplicate target ID")
-
-                    # Additional check: if alternative is duplicate exam main, reject
-                    if alt_id in duplicate_exam_ids:
-                        logging.debug(f"Rejecting alternative {alt_id} - is duplicate exam main ID")
-                        is_not_exam_main = False
-
-                    if is_valid_target and is_not_exam_main and is_not_forbidden:
-                        new_target = alt_id
-                        break
-
-                if new_target:
-                    resolved_mapping[exam_id] = new_target
-                    logging.debug(f"Reassigned exam ID {exam_id} from {target_id} to {new_target}")
+def _hungarian(cost):
+    """Minimum-cost assignment on a square matrix. Returns a list: row -> column."""
+    n = len(cost)
+    INF = float('inf')
+    u = [0] * (n + 1)
+    v = [0] * (n + 1)
+    p = [0] * (n + 1)
+    way = [0] * (n + 1)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [INF] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = INF
+            j1 = 0
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
                 else:
-                    logging.debug(f"Could not find alternative for exam ID {exam_id}")
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    assignment = [0] * n
+    for j in range(1, n + 1):
+        assignment[p[j] - 1] = j - 1
+    return assignment
 
-        return resolved_mapping
 
-    except Exception as e:
-        logging.debug(f"Error in conflict resolution: {e}")
-        return None
-    
-def extract_exam_sections(exam_content):
-    """Extract question sections from exam content"""
-    sections = {}
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    matches = numbered_pattern.findall(exam_content)
-    logging.debug(f"Found {len(matches)} numbered questions in exam content.")
-    for i, (q_num, main_id) in enumerate(matches):
-        question_num = int(q_num)
-        if i < len(matches) - 1:
-            next_q_num = int(matches[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        section_match = re.search(section_pattern, exam_content, re.DOTALL)
-        if section_match:
-            sections[main_id] = section_match.group(0)
-            logging.debug(f"Section for main_id {main_id} (Q{question_num}) length: {len(section_match.group(0))}")
-        else:
-            logging.debug(f"No section found for main_id {main_id} (Q{question_num})")
-    logging.debug(f"Extracted {len(sections)} sections from exam content.")
-    return sections
+def plan_changes(target_questions, test_questions):
+    """Decide which test questions to switch to an alternate.
 
-def get_alternatives_for_exam_id(exam_id, exam_sections):
-    """Get alternatives for a specific exam ID"""
-    if exam_id in exam_sections:
-        section_content = exam_sections[exam_id]
-        all_ids = re.findall(r'\(id:(\d+)\)', section_content)
-        alternatives = [alt_id for alt_id in all_ids if alt_id != exam_id]
-        logging.debug(f"Alternatives for exam_id {exam_id}: {alternatives}")
-        return alternatives
-    logging.debug(f"No section found for exam_id {exam_id} in exam_sections.")
-    return []
+    Goal: the test's set of main question IDs becomes identical to the target's
+    (question order is irrelevant), with the fewest possible changes.
+
+    Every test question is free to move. A question that already matches a target
+    ID is only moved when that is the sole way to reach a missing target ID, and
+    then the ID it gives up is picked back up by another question that carries it
+    as an alternate (a chain). A target ID is "unreachable" only if no test
+    question can be switched to it under those rules.
+
+    Returns (plan, unreachable, extra):
+        plan        list of (test_question_num, current_id, new_id), sorted by question
+        unreachable target IDs that no assignment can bring into the test
+        extra       test question numbers left without a target ID (counts differ)
+    """
+    target_ids = [q['main'] for q in target_questions]
+    n = max(len(target_ids), len(test_questions))
+
+    cost = []
+    for r in range(n):
+        row = []
+        for c in range(n):
+            if r >= len(test_questions) or c >= len(target_ids):
+                row.append(COST_DUMMY)
+                continue
+            q, tid = test_questions[r], target_ids[c]
+            if tid == q['main']:
+                row.append(COST_KEEP)
+            elif tid in q['alts']:
+                row.append(COST_CHANGE)
+            else:
+                row.append(COST_IMPOSSIBLE)
+        cost.append(row)
+
+    assignment = _hungarian(cost)
+
+    plan, unreachable, extra = [], [], []
+    for r, c in enumerate(assignment):
+        if r >= len(test_questions):
+            if c < len(target_ids):
+                unreachable.append(target_ids[c])
+            continue
+        q = test_questions[r]
+        if c >= len(target_ids):
+            extra.append(q['num'])
+            continue
+        tid = target_ids[c]
+        if cost[r][c] >= COST_IMPOSSIBLE:
+            unreachable.append(tid)
+            extra.append(q['num'])
+        elif tid != q['main']:
+            plan.append((q['num'], q['main'], tid))
+
+    plan.sort()
+    logging.debug(f"Plan: {plan} | unreachable: {unreachable} | extra: {extra}")
+    return plan, sorted(unreachable), sorted(extra)
+
 
 def get_browser_windows():
     """Get list of browser windows"""
@@ -405,490 +294,6 @@ def capture_html_from_browser(hwnd):
         
     except Exception as e:
         return None, f"Error capturing HTML: {str(e)}"
-
-def extract_numbered_questions_from_content(content):
-    """Extract numbered questions from HTML content (not file)"""
-    if not content:
-        return None, "No content provided"
-    
-    decoded_content = html.unescape(content)
-    
-    # Extract numbered questions
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    
-    if not numbered_matches:
-        return None, "No numbered questions found"
-    
-    # Sort by question number
-    sorted_questions = sorted(numbered_matches, key=lambda x: int(x[0]))
-    question_ids = [qid for _, qid in sorted_questions]
-    
-    return question_ids, None
-
-def detect_file_type_from_content(content):
-    """Detect file type from HTML content (not file)"""
-    if not content:
-        return None, "No content provided"
-    
-    decoded_content = html.unescape(content)
-    
-    # Check for numbered questions pattern
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    
-    if len(numbered_matches) < 5:
-        # Not enough numbered questions to analyze
-        id_pattern = re.compile(r'\(id:(\d+)\)')
-        all_ids = id_pattern.findall(decoded_content)
-        return None, f"Not enough numbered questions found ({len(numbered_matches)}). Need at least 5."
-    
-    # Count alternatives per question
-    alternative_counts = []
-    for i, (q_num, main_id) in enumerate(numbered_matches):
-        question_num = int(q_num)
-        
-        # Extract this question's section
-        if i < len(numbered_matches) - 1:
-            next_q_num = int(numbered_matches[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        section_match = re.search(section_pattern, decoded_content, re.DOTALL)
-        
-        if section_match:
-            section_content = section_match.group(0)
-            section_ids = re.findall(r'\(id:(\d+)\)', section_content)
-            unique_ids = list(dict.fromkeys(section_ids))
-            alternative_counts.append(len(unique_ids))
-    
-    if not alternative_counts:
-        return None, "Could not analyze question structure"
-    
-    avg_alternatives = sum(alternative_counts) / len(alternative_counts)
-    
-    if avg_alternatives >= 3:
-        return "normal_target", f"Normal target file with {len(numbered_matches)} questions (avg {avg_alternatives:.1f} IDs/question - has alternatives)"
-    else:
-        return "comp_test", f"Comp test file with {len(numbered_matches)} questions (avg {avg_alternatives:.1f} IDs/question - single IDs)"
-
-def extract_numbered_questions(filepath):
-    """Extract numbered questions from exam file"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except Exception as e:
-        return None, f"Error reading file: {e}"
-    
-    decoded_content = html.unescape(content)
-    
-    # Extract numbered questions
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    
-    if not numbered_matches:
-        return None, "No numbered questions found"
-    
-    # Sort by question number
-    sorted_questions = sorted(numbered_matches, key=lambda x: int(x[0]))
-    question_ids = [qid for _, qid in sorted_questions]
-    
-    return question_ids, None
-
-def detect_file_type(filepath):
-    """Detect file type based on alternatives structure:
-    - normal_target: Has numbered questions with multiple IDs (alternatives)
-    - comp_test: Has numbered questions with single IDs (no alternatives)
-    """
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except Exception as e:
-        return None, f"Error reading file: {e}"
-    
-    decoded_content = html.unescape(content)
-    
-    # Check for numbered questions pattern
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    
-    if len(numbered_matches) < 5:
-        # Not enough numbered questions to analyze
-        id_pattern = re.compile(r'\(id:(\d+)\)')
-        all_ids = id_pattern.findall(decoded_content)
-        unique_ids = list(dict.fromkeys(all_ids))
-        
-        if len(unique_ids) >= 10:
-            return "comp_test", f"Comp test file with {len(unique_ids)} unique IDs (no numbered structure)"
-        else:
-            return "unknown", "Unable to determine file type"
-    
-    # Analyze first 5 questions to check for alternatives
-    numbered_sorted = sorted(numbered_matches, key=lambda x: int(x[0]))
-    total_ids_in_sections = 0
-    
-    for i, (q_num, main_id) in enumerate(numbered_sorted[:5]):
-        question_num = int(q_num)
-        
-        # Extract this question's section
-        if i < len(numbered_sorted) - 1:
-            next_q_num = int(numbered_sorted[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        section_match = re.search(section_pattern, decoded_content, re.DOTALL)
-        
-        if section_match:
-            section_content = section_match.group(0)
-            section_ids = re.findall(r'\(id:(\d+)\)', section_content)
-            unique_ids = list(dict.fromkeys(section_ids))
-            total_ids_in_sections += len(unique_ids)
-    
-    # Calculate average IDs per question
-    avg_ids_per_question = total_ids_in_sections / min(5, len(numbered_matches))
-    
-    if avg_ids_per_question > 2.0:
-        return "normal_target", f"Normal target file with {len(numbered_matches)} questions (avg {avg_ids_per_question:.1f} IDs/question - has alternatives)"
-    else:
-        return "comp_test", f"Comp test file with {len(numbered_matches)} questions (avg {avg_ids_per_question:.1f} IDs/question - no alternatives)"
-
-def extract_comp_test_mapping_from_content(target_content, exam_content):
-    """
-    Content-based version of comp test mapping for browser capture
-    Goal: Make exam's main IDs exactly match target's main IDs by selecting correct alternatives
-    """
-    try:
-        target_decoded = html.unescape(target_content)
-        exam_decoded = html.unescape(exam_content)
-
-        # Extract target numbered questions (main questions in target)
-        target_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-        target_numbered = target_numbered_pattern.findall(target_decoded)
-        target_sorted = sorted(target_numbered, key=lambda x: int(x[0]))
-
-        logging.debug(f"Target has {len(target_sorted)} main questions")
-
-        # ONLY target main IDs matter - these are what exam must match
-        target_main_ids = set(main_id for _, main_id in target_sorted)
-        logging.debug(f"Target main IDs (must match these): {sorted(target_main_ids)}")
-
-        # Extract exam numbered questions
-        exam_numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-        exam_numbered = exam_numbered_pattern.findall(exam_decoded)
-        exam_sorted = sorted(exam_numbered, key=lambda x: int(x[0]))
-
-        logging.debug(f"Exam has {len(exam_sorted)} questions")
-        
-        # Track which exam questions already have correct IDs
-        exam_main_ids = set(main_id for _, main_id in exam_sorted)
-        logging.debug(f"Exam current main IDs: {sorted(exam_main_ids)}")
-
-        # STEP 1: Build all possible alternatives for each exam question
-        question_alternatives = {}  # question_num -> {'current_id': X, 'alternatives': [list of ALL IDs]}
-
-        for i, (exam_q_num, exam_main_id) in enumerate(exam_sorted):
-            question_num = int(exam_q_num)
-
-            # Extract this question's section to get all alternatives
-            if i < len(exam_sorted) - 1:
-                next_exam_q_num = int(exam_sorted[i+1][0])
-                section_pattern = rf'{question_num}\.\s+.*?(?={next_exam_q_num}\.\s+)'
-            else:
-                section_pattern = rf'{question_num}\.\s+.*'
-
-            exam_section_match = re.search(section_pattern, exam_decoded, re.DOTALL)
-
-            if exam_section_match:
-                exam_section_content = exam_section_match.group(0)
-                exam_section_ids = re.findall(r'\(id:(\d+)\)', exam_section_content)
-                exam_unique_ids = list(dict.fromkeys(exam_section_ids))
-
-                question_alternatives[question_num] = {
-                    'current_id': exam_main_id,
-                    'all_ids': exam_unique_ids  # Including current main ID
-                }
-                logging.debug(f"Q{question_num} current={exam_main_id}, all_ids={exam_unique_ids}")
-
-        # STEP 2: Identify which questions need changes and what their options are
-        questions_needing_change = {}  # question_num -> list of valid target IDs it can switch to
-
-        for question_num, info in question_alternatives.items():
-            current_id = info['current_id']
-            
-            # If current ID is already in target, no change needed
-            if current_id in target_main_ids:
-                logging.debug(f"Q{question_num}: ID {current_id} already matches target - no change needed")
-                continue
-            
-            # Find which alternatives are valid target main IDs
-            valid_alternatives = [alt_id for alt_id in info['all_ids'] 
-                                 if alt_id != current_id and alt_id in target_main_ids]
-            
-            if valid_alternatives:
-                questions_needing_change[question_num] = {
-                    'current_id': current_id,
-                    'options': valid_alternatives
-                }
-                logging.debug(f"Q{question_num}: needs change, options={valid_alternatives}")
-            else:
-                logging.debug(f"Q{question_num}: needs change but has NO valid alternatives!")
-
-        # STEP 3: Perfect matching using backtracking solver for optimal assignment
-        exam_to_target_mapping = {}
-        used_target_ids = set()
-        
-        # Add IDs that are already correct (no change needed)
-        for question_num, info in question_alternatives.items():
-            if question_num not in questions_needing_change:
-                current_id = info['current_id']
-                if current_id in target_main_ids:
-                    used_target_ids.add(current_id)
-                    logging.debug(f"Q{question_num}: keeping {current_id} (already correct)")
-
-        logging.debug(f"Starting conflict resolution. {len(questions_needing_change)} questions need changes")
-        logging.debug(f"Already matched target IDs: {sorted(used_target_ids)}")
-
-        # Use backtracking solver for optimal assignment
-        if questions_needing_change:
-            # Filter options to exclude already-used targets
-            filtered_questions = {}
-            for q_num, info in questions_needing_change.items():
-                filtered_options = [opt for opt in info['options'] if opt not in used_target_ids]
-                if filtered_options:
-                    filtered_questions[q_num] = {
-                        'current_id': info['current_id'],
-                        'options': filtered_options
-                    }
-                else:
-                    logging.debug(f"Q{q_num}: no valid options after filtering already-used targets")
-            
-            if filtered_questions:
-                # Try backtracking solver first
-                backtrack_result = solve_exam_matching_with_backtracking(
-                    filtered_questions, target_main_ids, used_target_ids
-                )
-                
-                if backtrack_result:
-                    exam_to_target_mapping = backtrack_result
-                    logging.debug(f"Backtracking solver succeeded with {len(backtrack_result)} mappings")
-                else:
-                    # Fallback to bipartite matching
-                    logging.debug("Backtracking failed, trying bipartite matching...")
-                    question_list = list(filtered_questions.keys())
-                    question_options = {q: info['options'] for q, info in filtered_questions.items()}
-                    
-                    bipartite_result = find_maximum_bipartite_matching(
-                        question_list, target_main_ids - used_target_ids, question_options
-                    )
-                    
-                    if bipartite_result:
-                        # Convert from question_num -> target to current_id -> target
-                        for q_num, target_id in bipartite_result.items():
-                            current_id = filtered_questions[q_num]['current_id']
-                            exam_to_target_mapping[current_id] = target_id
-                        logging.debug(f"Bipartite matching succeeded with {len(exam_to_target_mapping)} mappings")
-                    else:
-                        # Final fallback: greedy with constraint propagation
-                        logging.debug("Both solvers failed, using greedy fallback...")
-                        max_iterations = 50
-                        iteration = 0
-                        temp_questions = dict(filtered_questions)
-                        temp_used = set(used_target_ids)
-                        
-                        while temp_questions and iteration < max_iterations:
-                            iteration += 1
-                            
-                            # Update available options
-                            for q_num in list(temp_questions.keys()):
-                                available = [opt for opt in temp_questions[q_num]['options'] if opt not in temp_used]
-                                if not available:
-                                    del temp_questions[q_num]
-                                else:
-                                    temp_questions[q_num]['available'] = available
-                            
-                            if not temp_questions:
-                                break
-                            
-                            # Most constrained first
-                            sorted_qs = sorted(temp_questions.items(), key=lambda x: len(x[1].get('available', [])))
-                            q_num, info = sorted_qs[0]
-                            available = info.get('available', [])
-                            
-                            if available:
-                                chosen = available[0]
-                                exam_to_target_mapping[info['current_id']] = chosen
-                                temp_used.add(chosen)
-                                del temp_questions[q_num]
-
-        if not exam_to_target_mapping and questions_needing_change:
-            remaining = list(questions_needing_change.keys())
-            logging.debug(f"ERROR: Could not resolve {len(remaining)} questions: {remaining}")
-            return None, f"Could not find valid alternatives for questions: {remaining}"
-
-        # STEP 4: Validate the solution
-        logging.debug(f"=== VALIDATION ===")
-        logging.debug(f"Mappings to apply: {len(exam_to_target_mapping)}")
-        
-        # Check for duplicates
-        assigned_targets = list(exam_to_target_mapping.values())
-        if len(assigned_targets) != len(set(assigned_targets)):
-            logging.debug("ERROR: Duplicate target assignments detected!")
-            return None, "Duplicate assignments - algorithm error"
-        
-        # Calculate final coverage
-        final_matched_ids = used_target_ids.copy()
-        logging.debug(f"Final matched target IDs: {len(final_matched_ids)}/{len(target_main_ids)}")
-        logging.debug(f"Matched: {sorted(final_matched_ids)}")
-        
-        missing = target_main_ids - final_matched_ids
-        if missing:
-            logging.debug(f"WARNING: {len(missing)} target IDs not matched: {sorted(missing)}")
-        
-        return exam_to_target_mapping, None
-
-    except Exception as e:
-        return None, f"Error in comp test mapping: {e}"
-    
-def extract_comp_test_mapping(comp_test_filepath, exam_filepath):
-    """
-    Extract mapping for comp_test scenario using smart matching with backtracking
-    - comp_test_filepath: target file (contains the correct answers)
-    - exam_filepath: exam file (current selections to compare against target)
-    
-    Uses the improved content-based algorithm with backtracking solver.
-    """
-    import logging
-    logging.basicConfig(filename='debug_log.txt', level=logging.DEBUG, format='%(asctime)s %(message)s')
-    try:
-        # Read target file 
-        with open(comp_test_filepath, 'r', encoding='utf-8') as f:
-            target_content = f.read()
-        
-        # Read exam file  
-        with open(exam_filepath, 'r', encoding='utf-8') as f:
-            exam_content = f.read()
-            
-    except Exception as e:
-        return None, f"Error reading files: {e}"
-    
-    # Use the improved content-based algorithm
-    return extract_comp_test_mapping_from_content(target_content, exam_content)
-
-def extract_target_mapping_from_content(content):
-    """Extract alternative-to-main mapping from HTML content"""
-    if not content:
-        return None, "No content provided"
-    
-    decoded_content = html.unescape(content)
-    
-    # Find all numbered questions with their IDs - this gives us the main questions
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    sorted_questions = sorted(numbered_matches, key=lambda x: int(x[0]))
-    
-    # Build mapping by finding question sections
-    alternative_to_main = {}
-    
-    for i, (q_num, main_id) in enumerate(sorted_questions):
-        question_num = int(q_num)
-        
-        # Create regex pattern to extract this question's section
-        if i < len(sorted_questions) - 1:
-            next_q_num = int(sorted_questions[i+1][0])
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        section_match = re.search(section_pattern, decoded_content, re.DOTALL)
-        
-        if section_match:
-            section_content = section_match.group(0)
-            
-            # Extract all IDs from this section
-            all_ids = re.findall(r'\(id:(\d+)\)', section_content)
-            unique_ids = list(dict.fromkeys(all_ids))
-            
-            # Map all IDs in this section to the main ID
-            # Only map if ID hasn't been seen before (first occurrence wins)
-            # Exception: for Q17/Q22 shared alternatives, prefer Q22
-            for alt_id in unique_ids:
-                if alt_id not in alternative_to_main:
-                    alternative_to_main[alt_id] = main_id
-                else:
-                    # Handle Q17/Q22 conflict - prefer Q22 (136044) over Q17 (136045)
-                    existing_main = alternative_to_main[alt_id]
-                    if existing_main == '136045' and main_id == '136044':
-                        # Override Q17 with Q22 for shared alternatives
-                        alternative_to_main[alt_id] = main_id
-    
-    return alternative_to_main, None
-
-def extract_target_mapping_fixed(filepath):
-    """Extract alternative-to-main mapping using proper question boundary detection"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except Exception as e:
-        return None, f"Error reading file: {e}"
-    
-    decoded_content = html.unescape(content)
-    
-    # Find all numbered questions with their IDs - this gives us the main questions
-    numbered_pattern = re.compile(r'(\d+)\.\s+[^(]*\(id:(\d+)\)')
-    numbered_matches = numbered_pattern.findall(decoded_content)
-    sorted_questions = sorted(numbered_matches, key=lambda x: int(x[0]))
-    
-    print(f"DEBUG: Found {len(sorted_questions)} numbered questions")
-    
-    # Build mapping by finding question sections using a different approach
-    alternative_to_main = {}
-    
-    # Since the file is one big line, we need to split by question boundaries
-    # Look for the pattern: question number followed by question text and ID
-    question_sections = []
-    
-    for i, (q_num, main_id) in enumerate(sorted_questions):
-        question_num = int(q_num)
-        
-        # Create regex pattern to extract this question's section
-        # Look for: "N. [question text](id:XXXXX)" until next question "N+1. "
-        if i < len(sorted_questions) - 1:
-            next_q_num = int(sorted_questions[i+1][0])
-            # Pattern: from "N. " to "N+1. " (but not including the next question)
-            section_pattern = rf'{question_num}\.\s+.*?(?={next_q_num}\.\s+)'
-        else:
-            # Last question - goes to end of content
-            section_pattern = rf'{question_num}\.\s+.*'
-        
-        section_match = re.search(section_pattern, decoded_content, re.DOTALL)
-        
-        if section_match:
-            section_content = section_match.group(0)
-            
-            # Extract all IDs from this section
-            all_ids = re.findall(r'\(id:(\d+)\)', section_content)
-            # Remove duplicates while preserving order
-            unique_ids = list(dict.fromkeys(all_ids))
-            
-            print(f"DEBUG: Q{question_num} (Main: {main_id}) has {len(unique_ids)} unique IDs")
-            print(f"DEBUG: Q{question_num} IDs: {unique_ids[:10]}...")  # Show first 10
-            
-            # Map all IDs in this section to the main ID
-            for alt_id in unique_ids:
-                alternative_to_main[alt_id] = main_id
-            
-            question_sections.append({
-                'number': question_num,
-                'main_id': main_id,
-                'all_ids': unique_ids,
-                'section_length': len(section_content)
-            })
-    
-    print(f"DEBUG: Total mappings created: {len(alternative_to_main)}")
-    
-    return alternative_to_main, None
 
 def create_fixed_mapping_gui():
     root = tk.Tk()
@@ -1185,164 +590,80 @@ def create_fixed_mapping_gui():
     
     # Compare button
     def generate_mapping():
-        # Check if content is available (either from files or browser capture)
         if not target_content['content'] or not exam_content['content']:
             messagebox.showerror("Error", "Please load both target and exam content (via file or browser capture)")
             return
-        
-        # Clear previous results
+
         status_text.delete(1.0, tk.END)
         results_text.delete(1.0, tk.END)
-        
-        status_text.insert(tk.END, "🔍 Analyzing test content...\n")
+
+        status_text.insert(tk.END, "🔍 Reading target...\n")
         root.update()
-        
-        # Get exam current selections from content
-        exam_current, exam_error = extract_numbered_questions_from_content(exam_content['content'])
-        if exam_error:
-            status_text.insert(tk.END, f"❌ Test content error: {exam_error}\n")
+        target_qs, err = parse_questions(target_content['content'])
+        if err:
+            status_text.insert(tk.END, f"❌ Target error: {err}\n")
             return
-        
-        status_text.insert(tk.END, f"✅ Test questions: {len(exam_current)}\n")
-        status_text.insert(tk.END, "🔍 Detecting target content type...\n")
+        status_text.insert(tk.END, f"✅ Target questions: {len(target_qs)}\n")
+
+        status_text.insert(tk.END, "🔍 Reading test...\n")
         root.update()
-        
-        # Detect target content type automatically
-        file_type, type_info = detect_file_type_from_content(target_content['content'])
-        status_text.insert(tk.END, f"📋 {type_info}\n")
-        root.update()
-        
-        # FORCE comp test algorithm when both exam and target are loaded
-        # This is the scenario you want - compare exam against target using alternatives
-        status_text.insert(tk.END, "🎯 Using comp test mapping algorithm (exam vs target)...\n")
-        alt_to_main, target_error = extract_comp_test_mapping_from_content(target_content['content'], exam_content['content'])
-        if target_error:
-            status_text.insert(tk.END, f"❌ Comp test mapping error: {target_error}\n")
+        test_qs, err = parse_questions(exam_content['content'])
+        if err:
+            status_text.insert(tk.END, f"❌ Test error: {err}\n")
             return
-        
-        if target_error:
-            status_text.insert(tk.END, f"❌ Target content error: {target_error}\n")
-            return
-        
-        status_text.insert(tk.END, f"✅ Target mapping created: {len(alt_to_main)} entries\n")
-        
-        # Apply conflict resolution
-        status_text.insert(tk.END, "🔄 Checking for conflicts...\n")
+        status_text.insert(tk.END, f"✅ Test questions: {len(test_qs)}\n")
+
+        if len(target_qs) != len(test_qs):
+            status_text.insert(tk.END,
+                f"⚠️  Question counts differ ({len(target_qs)} vs {len(test_qs)}); the tests cannot be made identical.\n")
+
+        status_text.insert(tk.END, "🎯 Matching test questions to target question IDs...\n")
         root.update()
-        
-        resolved_mapping = resolve_conflicts(alt_to_main, target_content['content'], exam_content['content'])
-        if resolved_mapping:
-            alt_to_main = resolved_mapping
-            status_text.insert(tk.END, "✅ Conflicts resolved successfully\n")
-        else:
-            status_text.insert(tk.END, "⚠️ Conflict resolution failed, using original mapping\n")
-        
-        # Generate results
+        plan, unreachable, extra = plan_changes(target_qs, test_qs)
+
+        target_ids = {q['main'] for q in target_qs}
+        new_by_num = {num: new for num, _, new in plan}
+        picked_up_by = {new: num for num, _, new in plan}   # new ID -> question that will carry it
+
         results_text.insert(tk.END, "📄 EXAM CLONE REPORT\n")
         results_text.insert(tk.END, "=" * 70 + "\n")
-        results_text.insert(tk.END, f"Target: {target_content['source']} ({file_type})\n")
-        results_text.insert(tk.END, f"Test: {exam_content['source']} (to compare)\n")
-        results_text.insert(tk.END, f"Analysis: {type_info}\n")
+        results_text.insert(tk.END, f"Target: {target_content['source']}\n")
+        results_text.insert(tk.END, f"Test:   {exam_content['source']}\n")
+        results_text.insert(tk.END, "Goal:   test has the same question IDs as target (order does not matter)\n")
         results_text.insert(tk.END, "=" * 70 + "\n\n")
-        
-        changes_needed = []
-        no_change_needed = []
-        no_mapping_found = []
-        
-        # Process each exam position with comp_test logic (forced)
-        # Always use comp_test logic when both exam and target are loaded
-        if True:  # Force comp_test processing
-            # For comp_test: alt_to_main contains exam_main_id → tart_id mappings
-            status_text.insert(tk.END, "🔍 Processing comp test mapping...\n")
-            root.update()
-            
-            for i, current_id in enumerate(exam_current, 1):
-                if current_id in alt_to_main:
-                    # This exam ID has a mapping to a tart ID
-                    target_id = alt_to_main[current_id]
-                    
-                    if current_id == target_id:
-                        # Already correct
-                        results_text.insert(tk.END, f"Question #{i}: ✅ Already correct (ID:{current_id})\n")
-                        no_change_needed.append(i)
-                    else:
-                        # Need to change to tart ID
-                        results_text.insert(tk.END, f"Question #{i}: Change (ID:{current_id}) -> (ID:{target_id})\n")
-                        changes_needed.append({
-                            'position': i,
-                            'from_id': current_id,
-                            'to_id': target_id
-                        })
-                else:
-                    # Check if current ID is already a target main ID (no change needed)
-                    target_current, _ = extract_numbered_questions_from_content(target_content['content'])
-                    if current_id in target_current:
-                        target_q_pos = target_current.index(current_id) + 1
-                        results_text.insert(tk.END, f"Question #{i}: ✅ Already matches target Q{target_q_pos} (ID:{current_id})\n")
-                        no_change_needed.append(i)
-                    else:
-                        # Truly unknown/no alternatives match
-                        results_text.insert(tk.END, f"Question #{i}: ❌ No suitable alternatives (current ID:{current_id})\n")
-                        no_mapping_found.append({
-                            'position': i,
-                            'current_id': current_id
-                        })
+
+        already_correct = 0
+        for q in test_qs:
+            num, cur = q['num'], q['main']
+            if num in new_by_num:
+                new = new_by_num[num]
+                line = f"Question #{num}: Change (ID:{cur}) -> alternate (ID:{new})"
+                if cur in target_ids and cur in picked_up_by:
+                    line += f"   [ID:{cur} is picked up by question #{picked_up_by[cur]}]"
+                results_text.insert(tk.END, line + "\n")
+            elif num in extra:
+                results_text.insert(tk.END, f"Question #{num}: ❌ ID:{cur} is not in the target and no alternate reaches a missing target ID\n")
+            else:
+                already_correct += 1
+                results_text.insert(tk.END, f"Question #{num}: ✅ Already correct (ID:{cur})\n")
+
+        results_text.insert(tk.END, "\n" + "=" * 30 + " SUMMARY " + "=" * 30 + "\n")
+        results_text.insert(tk.END, f"✅ Already correct: {already_correct}\n")
+        results_text.insert(tk.END, f"🔄 Changes needed: {len(plan)}\n")
+        if unreachable:
+            results_text.insert(tk.END, f"❌ Target IDs no test question can reach: {', '.join(unreachable)}\n")
+        if extra:
+            results_text.insert(tk.END, f"❌ Test questions left without a target ID: {', '.join('#' + str(n) for n in extra)}\n")
+        results_text.insert(tk.END, f"📊 Total test questions: {len(test_qs)}\n")
+
+        identical = not unreachable and not extra and len(target_qs) == len(test_qs)
+        if identical:
+            results_text.insert(tk.END, "🎉 After these changes the test will be identical to the target.\n")
+            status_text.insert(tk.END, f"🎯 Report complete! {len(plan)} change(s) make the tests identical.\n")
         else:
-            # Normal target processing
-            for i, current_id in enumerate(exam_current, 1):
-                if current_id in alt_to_main:
-                    main_id = alt_to_main[current_id]
-                    
-                    if current_id == main_id:
-                        # Already the correct main question
-                        results_text.insert(tk.END, f"Question #{i}: ✅ Already correct (ID:{current_id})\n")
-                        no_change_needed.append(i)
-                    else:
-                        # Need to change from alternative to main
-                        results_text.insert(tk.END, f"Question #{i}: Change (ID:{current_id}) -> (ID:{main_id})\n")
-                        changes_needed.append({
-                            'position': i,
-                            'from_id': current_id,
-                            'to_id': main_id
-                        })
-                else:
-                    # Check if current ID is already a target main ID
-                    target_current, _ = extract_numbered_questions_from_content(target_content['content'])
-                    if current_id in target_current:
-                        target_q_pos = target_current.index(current_id) + 1
-                        results_text.insert(tk.END, f"Question #{i}: ✅ Already matches target Q{target_q_pos} (ID:{current_id})\n")
-                        no_change_needed.append(i)
-                    else:
-                        # No mapping found for this ID
-                        results_text.insert(tk.END, f"Question #{i}: ❌ Unknown ID:{current_id} (not in target)\n")
-                        no_mapping_found.append({
-                            'position': i,
-                            'current_id': current_id
-                        })
-        
-        # Summary
-        results_text.insert(tk.END, f"\n" + "=" * 30 + " SUMMARY " + "=" * 30 + "\n")
-        results_text.insert(tk.END, f"🔄 Changes needed: {len(changes_needed)}\n")
-        results_text.insert(tk.END, f"✅ Already correct: {len(no_change_needed)}\n")
-        results_text.insert(tk.END, f"❌ Unknown IDs: {len(no_mapping_found)}\n")
-        results_text.insert(tk.END, f"📊 Total positions: {len(exam_current)}\n")
-        
-        # Calculate success rate
-        total_processed = len(exam_current)
-        mappable = len(changes_needed) + len(no_change_needed)
-        success_rate = (mappable / total_processed * 100) if total_processed else 0
-        
-        results_text.insert(tk.END, f"📈 Mapping success: {success_rate:.1f}%\n")
-        results_text.insert(tk.END, f"--- END REPORT ---\n")
-        
-        # Update status
-        status_text.insert(tk.END, f"🎯 Report complete! {mappable}/{total_processed} questions mapped\n")
-        
-        if len(no_mapping_found) > 0:
-            status_text.insert(tk.END, f"⚠️  {len(no_mapping_found)} unknown IDs need investigation\n")
-        else:
-            status_text.insert(tk.END, "🎉 All IDs successfully mapped!\n")
-    
+            results_text.insert(tk.END, "⚠️  The tests cannot be made identical with the alternates available.\n")
+            status_text.insert(tk.END, "⚠️  Report complete, but the tests cannot be made identical. See results.\n")
+        results_text.insert(tk.END, "--- END REPORT ---\n")
     # Generate button
     generate_btn = tk.Button(main_frame, text="🔄 Generate Clone Report", command=generate_mapping, 
                             font=("Arial", 13, "bold"), bg="darkblue", fg="white", padx=40, pady=10)
